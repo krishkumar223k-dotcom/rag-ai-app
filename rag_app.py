@@ -1,5 +1,6 @@
 import streamlit as st
 import tempfile
+import os
 
 from langchain_community.document_loaders import PyPDFLoader
 from langchain_text_splitters import RecursiveCharacterTextSplitter
@@ -13,6 +14,8 @@ st.title("📄 Smart Document Q&A System (Cloud Version)")
 
 uploaded_file = st.file_uploader("Upload a PDF", type="pdf")
 
+
+# ---------------- DOCUMENT PROCESSING ----------------
 @st.cache_resource
 def process_document(file_path):
     loader = PyPDFLoader(file_path)
@@ -32,6 +35,7 @@ def process_document(file_path):
     return vectorstore
 
 
+# ---------------- MAIN LOGIC ----------------
 if uploaded_file is not None:
 
     with tempfile.NamedTemporaryFile(delete=False) as tmp_file:
@@ -45,27 +49,34 @@ if uploaded_file is not None:
 
     if question:
 
-        # ✅ Direct similarity search (more stable)
         docs = vectorstore.similarity_search(question, k=3)
 
         context = "\n\n".join([doc.page_content for doc in docs])
+
+        # ✅ SAFE TOKEN HANDLING
+        hf_token = os.getenv("HUGGINGFACEHUB_API_TOKEN")
+
+        if not hf_token:
+            st.error("HuggingFace token not found. Please set it in Streamlit Secrets.")
+            st.stop()
 
         llm = HuggingFaceEndpoint(
             repo_id="google/flan-t5-base",
             temperature=0,
             max_new_tokens=512,
+            huggingfacehub_api_token=hf_token,
         )
 
         final_prompt = f"""
-        Answer the question using ONLY the context below.
-        If the answer is not found, say 'Not found in document'.
+Answer the question using ONLY the context below.
+If the answer is not found, say 'Not found in document'.
 
-        Context:
-        {context}
+Context:
+{context}
 
-        Question:
-        {question}
-        """
+Question:
+{question}
+"""
 
         response = llm.invoke(final_prompt)
 

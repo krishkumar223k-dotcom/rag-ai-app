@@ -6,5 +6,5 @@ langchain-core
 faiss-cpu
 sentence-transformers
 pypdf
-huggingface-hub
+huggingface_hub
 
