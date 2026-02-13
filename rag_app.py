@@ -60,7 +60,7 @@ if uploaded_file is not None:
             st.error("HuggingFace token not found. Add it in Streamlit Secrets.")
             st.stop()
 
-        API_URL = "https://router.huggingface.co/hf-inference/models/google/flan-t5-base"
+        API_URL = "https://router.huggingface.co/google/flan-t5-base"
 
         headers = {
             "Authorization": f"Bearer {HF_TOKEN}"
