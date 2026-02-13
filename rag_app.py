@@ -47,27 +47,27 @@ if uploaded_file is not None:
 
     question = st.text_input("Ask a question about your document")
 
-    if question:
+    question = st.text_input("Ask a question about your document")
 
-        docs = vectorstore.similarity_search(question, k=3)
+   question = st.text_input("Ask a question about your document")
 
-        context = "\n\n".join([doc.page_content for doc in docs])
+         
+ if question:
 
-        # ✅ SAFE TOKEN HANDLING
-        hf_token = os.getenv("HUGGINGFACEHUB_API_TOKEN")
+    docs = vectorstore.similarity_search(question, k=3)
+    context = "\n\n".join([doc.page_content for doc in docs])
 
-        if not hf_token:
-            st.error("HuggingFace token not found. Please set it in Streamlit Secrets.")
-            st.stop()
+    import os
+    from langchain_core.output_parsers import StrOutputParser
 
-        llm = HuggingFaceEndpoint(
-            repo_id="google/flan-t5-base",
-            temperature=0,
-            max_new_tokens=512,
-            huggingfacehub_api_token=hf_token,
-        )
+    llm = HuggingFaceEndpoint(
+        repo_id="google/flan-t5-base",
+        temperature=0,
+        max_new_tokens=512,
+        huggingfacehub_api_token=os.environ["HUGGINGFACEHUB_API_TOKEN"],
+    )
 
-        final_prompt = f"""
+    final_prompt = f"""
 Answer the question using ONLY the context below.
 If the answer is not found, say 'Not found in document'.
 
@@ -78,7 +78,11 @@ Question:
 {question}
 """
 
-        response = llm(final_prompt)
+    parser = StrOutputParser()
+    chain = llm | parser
 
-        st.subheader("Answer")
-        st.write(response)
+    response = chain.invoke(final_prompt)
+
+    st.subheader("Answer")
+    st.write(response)
+
