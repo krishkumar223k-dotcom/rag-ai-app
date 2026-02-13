@@ -9,14 +9,13 @@ from langchain_community.vectorstores import FAISS
 from langchain_community.llms import HuggingFaceEndpoint
 from langchain_core.output_parsers import StrOutputParser
 
-
 # ---------------- PAGE SETTINGS ----------------
 st.set_page_config(page_title="Smart Document Q&A", layout="wide")
 st.title("📄 Smart Document Q&A System (Cloud Version)")
 
 uploaded_file = st.file_uploader("Upload a PDF", type="pdf")
 
-
+# ---------------- DOCUMENT PROCESSING ----------------
 @st.cache_resource
 def process_document(file_path):
     loader = PyPDFLoader(file_path)
@@ -26,7 +25,6 @@ def process_document(file_path):
         chunk_size=500,
         chunk_overlap=100
     )
-
     split_docs = splitter.split_documents(docs)
 
     embeddings = HuggingFaceEmbeddings(
@@ -34,12 +32,13 @@ def process_document(file_path):
     )
 
     vectorstore = FAISS.from_documents(split_docs, embeddings)
-
     return vectorstore
 
 
+# ---------------- MAIN APP ----------------
 if uploaded_file is not None:
 
+    # Save uploaded file temporarily
     with tempfile.NamedTemporaryFile(delete=False) as tmp_file:
         tmp_file.write(uploaded_file.read())
         tmp_path = tmp_file.name
@@ -51,16 +50,20 @@ if uploaded_file is not None:
 
     if question:
 
+        # Step 1: Retrieve relevant chunks
         docs = vectorstore.similarity_search(question, k=3)
         context = "\n\n".join([doc.page_content for doc in docs])
 
+        # Step 2: Setup HuggingFace LLM (Router Compatible Model)
         llm = HuggingFaceEndpoint(
-            repo_id="google/flan-t5-base",
+            repo_id="mistralai/Mistral-7B-Instruct-v0.2",
+            task="text-generation",
             temperature=0,
             max_new_tokens=512,
             huggingfacehub_api_token=os.environ["HUGGINGFACEHUB_API_TOKEN"],
         )
 
+        # Step 3: Create Prompt
         final_prompt = f"""
 Answer the question using ONLY the context below.
 If the answer is not found, say 'Not found in document'.
@@ -72,9 +75,11 @@ Question:
 {question}
 """
 
+        # Step 4: Parse Output
         parser = StrOutputParser()
         chain = llm | parser
 
+        # Step 5: Generate Answer
         response = chain.invoke(final_prompt)
 
         st.subheader("Answer")
