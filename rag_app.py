@@ -3,20 +3,22 @@ from langchain_community.document_loaders import PyPDFLoader
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_community.embeddings import HuggingFaceEmbeddings
 from langchain_community.vectorstores import FAISS
-from langchain_community.llms import Ollama
 from langchain_core.prompts import ChatPromptTemplate
+import requests
 import tempfile
 
 st.set_page_config(page_title="Smart Document Q&A", layout="wide")
-st.title("📄 Smart Document Q&A System (FAST RAG + SOURCES)")
+st.title("📄 Smart Document Q&A System (Cloud Version)")
 
 uploaded_file = st.file_uploader("Upload a PDF", type="pdf")
 
+HF_TOKEN = st.secrets["HUGGINGFACEHUB_API_TOKEN"]
+API_URL = "https://api-inference.huggingface.co/models/google/flan-t5-base"
 
-# ---------- CACHE DOCUMENT PROCESSING ----------
+headers = {"Authorization": f"Bearer {HF_TOKEN}"}
+
 @st.cache_resource
 def process_document(file_path):
-
     loader = PyPDFLoader(file_path)
     docs = loader.load()
 
@@ -24,66 +26,60 @@ def process_document(file_path):
         chunk_size=400,
         chunk_overlap=100
     )
-    splits = splitter.split_documents(docs)
+
+    chunks = splitter.split_documents(docs)
 
     embeddings = HuggingFaceEmbeddings(
         model_name="sentence-transformers/all-MiniLM-L6-v2"
     )
 
-    vectorstore = FAISS.from_documents(splits, embeddings)
+    vectorstore = FAISS.from_documents(chunks, embeddings)
     return vectorstore
 
 
-# ---------- MAIN ----------
-if uploaded_file:
+def query_huggingface(prompt):
+    payload = {
+        "inputs": prompt,
+        "parameters": {
+            "max_new_tokens": 512,
+            "temperature": 0
+        }
+    }
 
-    with tempfile.NamedTemporaryFile(delete=False) as tmp_file:
-        tmp_file.write(uploaded_file.read())
-        tmp_path = tmp_file.name
+    response = requests.post(API_URL, headers=headers, json=payload)
 
-    with st.spinner("Processing document..."):
-        vectorstore = process_document(tmp_path)
+    if response.status_code == 200:
+        return response.json()[0]["generated_text"]
+    else:
+        return f"Error: {response.text}"
 
+
+if uploaded_file is not None:
+    with tempfile.NamedTemporaryFile(delete=False) as tmp:
+        tmp.write(uploaded_file.read())
+        file_path = tmp.name
+
+    vectorstore = process_document(file_path)
     st.success("Document processed successfully!")
 
-    retriever = vectorstore.as_retriever(search_kwargs={"k": 2})
+    question = st.text_input("Ask a question about your document")
 
-    llm = Ollama(model="tinyllama", keep_alive=True)
+    if question:
+        docs = vectorstore.similarity_search(question, k=3)
+        context = "\n\n".join([d.page_content for d in docs])
 
-    prompt = ChatPromptTemplate.from_template("""
-Answer ONLY using the provided context.
-If answer not found, say "Not in document".
+        prompt = f"""
+        Answer the question using only the context below.
 
-Context:
-{context}
+        Context:
+        {context}
 
-Question:
-{input}
-""")
+        Question:
+        {question}
+        """
 
-    query = st.text_input("Ask a question about your document")
-
-    if query:
         with st.spinner("Generating answer..."):
+            answer = query_huggingface(prompt)
 
-            docs = retriever.invoke(query)
-
-            context = "\n\n".join([d.page_content for d in docs])
-
-            response = llm.invoke(prompt.format(
-                context=context,
-                input=query
-            ))
-
-        st.subheader("Answer:")
-        st.write(response)
-
-        st.subheader("Sources:")
-
-        for i, doc in enumerate(docs, 1):
-            page = doc.metadata.get("page", "Unknown")
-            snippet = doc.page_content[:200]
-
-            st.markdown(f"**Source {i} — Page {page}**")
-            st.write(snippet + "...")
-
+        st.subheader("Answer")
+        st.write(answer)
