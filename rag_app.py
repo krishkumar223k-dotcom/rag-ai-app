@@ -78,7 +78,7 @@ Question:
 {question}
 """
 
-        response = llm.invoke(final_prompt)
+        response = llm(final_prompt)
 
         st.subheader("Answer")
         st.write(response)
