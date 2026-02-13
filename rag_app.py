@@ -8,13 +8,14 @@ from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_community.embeddings import HuggingFaceEmbeddings
 from langchain_community.vectorstores import FAISS
 
+
 # ---------------- PAGE SETTINGS ----------------
 st.set_page_config(page_title="Smart Document Q&A", layout="wide")
 st.title("📄 Smart Document Q&A System (Cloud Version)")
 
 uploaded_file = st.file_uploader("Upload a PDF", type="pdf")
 
-# ---------------- DOCUMENT PROCESSING ----------------
+
 @st.cache_resource
 def process_document(file_path):
     loader = PyPDFLoader(file_path)
@@ -24,6 +25,7 @@ def process_document(file_path):
         chunk_size=500,
         chunk_overlap=100
     )
+
     split_docs = splitter.split_documents(docs)
 
     embeddings = HuggingFaceEmbeddings(
@@ -34,7 +36,6 @@ def process_document(file_path):
     return vectorstore
 
 
-# ---------------- MAIN APP ----------------
 if uploaded_file is not None:
 
     with tempfile.NamedTemporaryFile(delete=False) as tmp_file:
@@ -51,7 +52,21 @@ if uploaded_file is not None:
         docs = vectorstore.similarity_search(question, k=3)
         context = "\n\n".join([doc.page_content for doc in docs])
 
-        final_prompt = f"""
+        # ---------------- HUGGINGFACE API CALL ----------------
+
+        HF_TOKEN = os.environ.get("HUGGINGFACEHUB_API_TOKEN")
+
+        if not HF_TOKEN:
+            st.error("HuggingFace token not found. Add it in Streamlit Secrets.")
+            st.stop()
+
+        API_URL = "https://router.huggingface.co/hf-inference/models/google/flan-t5-base"
+
+        headers = {
+            "Authorization": f"Bearer {HF_TOKEN}"
+        }
+
+        prompt = f"""
 Answer the question using ONLY the context below.
 If the answer is not found, say 'Not found in document'.
 
@@ -62,28 +77,33 @@ Question:
 {question}
 """
 
-        #  Direct HuggingFace Router API Call
-        API_URL = "https://router.huggingface.co/hf-inference/models/mistralai/Mistral-7B-Instruct-v0.2"
-
-        headers = {
-            "Authorization": f"Bearer {os.environ['HUGGINGFACEHUB_API_TOKEN']}"
-        }
-
         payload = {
-            "inputs": final_prompt,
+            "inputs": prompt,
             "parameters": {
-                "max_new_tokens": 512,
-                "temperature": 0
+                "temperature": 0,
+                "max_new_tokens": 512
             }
         }
 
         response = requests.post(API_URL, headers=headers, json=payload)
-        result = response.json()
+
+        # ---------------- SAFE ERROR HANDLING ----------------
+
+        if response.status_code != 200:
+            st.error(f"API Error: {response.text}")
+            st.stop()
 
         try:
+            result = response.json()
+        except Exception:
+            st.error("Invalid response from HuggingFace API.")
+            st.stop()
+
+        if isinstance(result, list) and "generated_text" in result[0]:
             answer = result[0]["generated_text"]
-        except:
+        else:
             answer = str(result)
 
         st.subheader("Answer")
         st.write(answer)
+
