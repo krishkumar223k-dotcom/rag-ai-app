@@ -1,16 +1,17 @@
 import streamlit as st
 import tempfile
 import os
+import requests
 
 from langchain_community.document_loaders import PyPDFLoader
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_community.embeddings import HuggingFaceEmbeddings
 from langchain_community.vectorstores import FAISS
-from langchain_community.llms import HuggingFaceHub
 
 
+# ---------------- PAGE SETTINGS ----------------
 st.set_page_config(page_title="Smart Document Q&A", layout="wide")
-st.title("📄 Smart Document Q&A System")
+st.title("📄 Smart Document Q&A System (Cloud Version)")
 
 uploaded_file = st.file_uploader("Upload a PDF", type="pdf")
 
@@ -24,7 +25,6 @@ def process_document(file_path):
         chunk_size=500,
         chunk_overlap=100
     )
-
     split_docs = splitter.split_documents(docs)
 
     embeddings = HuggingFaceEmbeddings(
@@ -51,13 +51,7 @@ if uploaded_file is not None:
         docs = vectorstore.similarity_search(question, k=3)
         context = "\n\n".join([doc.page_content for doc in docs])
 
-        llm = HuggingFaceHub(
-            repo_id="google/flan-t5-base",
-            model_kwargs={"temperature": 0, "max_length": 512},
-            huggingfacehub_api_token=os.environ["HUGGINGFACEHUB_API_TOKEN"],
-        )
-
-        final_prompt = f"""
+        prompt = f"""
 Answer the question using ONLY the context below.
 If the answer is not found, say 'Not found in document'.
 
@@ -68,7 +62,28 @@ Question:
 {question}
 """
 
-        response = llm(final_prompt)
+        #  DIRECT HuggingFace Router API (Latest Working Method)
+        API_URL = "https://router.huggingface.co/hf-inference/models/mistralai/Mistral-7B-Instruct-v0.2"
 
-        st.subheader("Answer")
-        st.write(response)
+        headers = {
+            "Authorization": f"Bearer {os.environ['HUGGINGFACEHUB_API_TOKEN']}",
+            "Content-Type": "application/json"
+        }
+
+        payload = {
+            "inputs": prompt,
+            "parameters": {
+                "max_new_tokens": 512,
+                "temperature": 0
+            }
+        }
+
+        response = requests.post(API_URL, headers=headers, json=payload)
+
+        if response.status_code == 200:
+            result = response.json()
+            answer = result[0]["generated_text"]
+            st.subheader("Answer")
+            st.write(answer)
+        else:
+            st.error(f"API Error: {response.text}")
