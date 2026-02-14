@@ -62,30 +62,31 @@ Question:
 """
 
         # ---------------- HUGGINGFACE API CALL ----------------
-        API_URL = "https://api-inference.huggingface.co/models/google/flan-t5-base"
+       API_URL = "https://router.huggingface.co/hf-inference/models/google/flan-t5-base"
 
-        headers = {
-            "Authorization": f"Bearer {os.environ['HUGGINGFACEHUB_API_TOKEN']}"
-        }
+headers = {
+    "Authorization": f"Bearer {os.environ['HUGGINGFACEHUB_API_TOKEN']}",
+    "Content-Type": "application/json"
+}
 
-        payload = {
-            "inputs": final_prompt,
-            "parameters": {
-                "temperature": 0,
-                "max_new_tokens": 512
-            }
-        }
+payload = {
+    "inputs": final_prompt,
+    "parameters": {
+        "temperature": 0,
+        "max_new_tokens": 512
+    }
+}
 
-        response = requests.post(API_URL, headers=headers, json=payload)
+response = requests.post(API_URL, headers=headers, json=payload)
 
-        if response.status_code != 200:
-            st.error(f"API Error: {response.text}")
-        else:
-            result = response.json()
+if response.status_code != 200:
+    st.error(f"API Error: {response.text}")
+else:
+    result = response.json()
 
-            if isinstance(result, list) and "generated_text" in result[0]:
-                answer = result[0]["generated_text"]
-                st.subheader("Answer")
-                st.write(answer)
-            else:
-                st.error(f"Unexpected API Response: {result}")
+    if isinstance(result, list) and "generated_text" in result[0]:
+        answer = result[0]["generated_text"]
+        st.subheader("Answer")
+        st.write(answer)
+    else:
+        st.error(f"Unexpected API Response: {result}")
