@@ -1,3 +1,4 @@
+
 import streamlit as st
 import tempfile
 import os
@@ -8,11 +9,13 @@ from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_community.embeddings import HuggingFaceEmbeddings
 from langchain_community.vectorstores import FAISS
 
+
 # ---------------- PAGE SETTINGS ----------------
 st.set_page_config(page_title="Smart Document Q&A", layout="wide")
 st.title("📄 Smart Document Q&A System (Cloud Version)")
 
 uploaded_file = st.file_uploader("Upload a PDF", type="pdf")
+
 
 @st.cache_resource
 def process_document(file_path):
@@ -23,6 +26,7 @@ def process_document(file_path):
         chunk_size=500,
         chunk_overlap=100
     )
+
     split_docs = splitter.split_documents(docs)
 
     embeddings = HuggingFaceEmbeddings(
@@ -35,7 +39,6 @@ def process_document(file_path):
 
 if uploaded_file is not None:
 
-    # Save uploaded file temporarily
     with tempfile.NamedTemporaryFile(delete=False) as tmp_file:
         tmp_file.write(uploaded_file.read())
         tmp_path = tmp_file.name
@@ -61,32 +64,31 @@ Question:
 {question}
 """
 
-        # ---------------- HUGGINGFACE API CALL ----------------
-       API_URL = "https://router.huggingface.co/hf-inference/models/google/flan-t5-base"
+        API_URL = "https://router.huggingface.co/hf-inference/models/google/flan-t5-base"
 
-headers = {
-    "Authorization": f"Bearer {os.environ['HUGGINGFACEHUB_API_TOKEN']}",
-    "Content-Type": "application/json"
-}
+        headers = {
+            "Authorization": f"Bearer {os.environ['HUGGINGFACEHUB_API_TOKEN']}",
+            "Content-Type": "application/json"
+        }
 
-payload = {
-    "inputs": final_prompt,
-    "parameters": {
-        "temperature": 0,
-        "max_new_tokens": 512
-    }
-}
+        payload = {
+            "inputs": final_prompt,
+            "parameters": {
+                "temperature": 0,
+                "max_new_tokens": 512
+            }
+        }
 
-response = requests.post(API_URL, headers=headers, json=payload)
+        response = requests.post(API_URL, headers=headers, json=payload)
 
-if response.status_code != 200:
-    st.error(f"API Error: {response.text}")
-else:
-    result = response.json()
+        if response.status_code != 200:
+            st.error(f"API Error: {response.text}")
+        else:
+            result = response.json()
 
-    if isinstance(result, list) and "generated_text" in result[0]:
-        answer = result[0]["generated_text"]
-        st.subheader("Answer")
-        st.write(answer)
-    else:
-        st.error(f"Unexpected API Response: {result}")
+            if isinstance(result, list) and "generated_text" in result[0]:
+                answer = result[0]["generated_text"]
+                st.subheader("Answer")
+                st.write(answer)
+            else:
+                st.error(f"Unexpected API Response: {result}")
