@@ -1,4 +1,3 @@
-
 import streamlit as st
 import tempfile
 import os
@@ -10,7 +9,6 @@ from langchain_community.embeddings import HuggingFaceEmbeddings
 from langchain_community.vectorstores import FAISS
 
 
-# ---------------- PAGE SETTINGS ----------------
 st.set_page_config(page_title="Smart Document Q&A", layout="wide")
 st.title("📄 Smart Document Q&A System (Cloud Version)")
 
@@ -53,9 +51,9 @@ if uploaded_file is not None:
         docs = vectorstore.similarity_search(question, k=3)
         context = "\n\n".join([doc.page_content for doc in docs])
 
-        final_prompt = f"""
-Answer the question using ONLY the context below.
-If the answer is not found, say 'Not found in document'.
+        prompt = f"""
+Use ONLY the context below to answer.
+If not found, say "Not found in document".
 
 Context:
 {context}
@@ -64,7 +62,7 @@ Question:
 {question}
 """
 
-        API_URL = "https://router.huggingface.co/hf-inference/models/google/flan-t5-base"
+        API_URL = "https://router.huggingface.co/hf-inference/models/HuggingFaceH4/zephyr-7b-beta"
 
         headers = {
             "Authorization": f"Bearer {os.environ['HUGGINGFACEHUB_API_TOKEN']}",
@@ -72,10 +70,10 @@ Question:
         }
 
         payload = {
-            "inputs": final_prompt,
+            "inputs": prompt,
             "parameters": {
                 "temperature": 0,
-                "max_new_tokens": 512
+                "max_new_tokens": 300
             }
         }
 
@@ -85,10 +83,7 @@ Question:
             st.error(f"API Error: {response.text}")
         else:
             result = response.json()
+            answer = result[0]["generated_text"]
 
-            if isinstance(result, list) and "generated_text" in result[0]:
-                answer = result[0]["generated_text"]
-                st.subheader("Answer")
-                st.write(answer)
-            else:
-                st.error(f"Unexpected API Response: {result}")
+            st.subheader("Answer")
+            st.write(answer)
