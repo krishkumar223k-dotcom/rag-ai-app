@@ -1,7 +1,7 @@
 import streamlit as st
 import tempfile
-import os
 import requests
+import os
 
 from langchain_community.document_loaders import PyPDFLoader
 from langchain_text_splitters import RecursiveCharacterTextSplitter
@@ -14,7 +14,6 @@ st.title("📄 Smart Document Q&A System (Cloud Version)")
 
 uploaded_file = st.file_uploader("Upload a PDF", type="pdf")
 
-# ---------------- DOCUMENT PROCESSING ----------------
 @st.cache_resource
 def process_document(file_path):
     loader = PyPDFLoader(file_path)
@@ -36,6 +35,7 @@ def process_document(file_path):
 
 if uploaded_file is not None:
 
+    # Save temp file
     with tempfile.NamedTemporaryFile(delete=False) as tmp_file:
         tmp_file.write(uploaded_file.read())
         tmp_path = tmp_file.name
@@ -47,6 +47,7 @@ if uploaded_file is not None:
 
     if question:
 
+        # Get relevant chunks
         docs = vectorstore.similarity_search(question, k=3)
         context = "\n\n".join([doc.page_content for doc in docs])
 
@@ -61,8 +62,8 @@ Question:
 {question}
 """
 
-        # ---------------- HUGGINGFACE ROUTER CALL ----------------
-        API_URL = "https://router.huggingface.co/hf-inference/models/mistralai/Mistral-7B-Instruct-v0.2"
+        #Correct HuggingFace Router API
+        API_URL = "https://router.huggingface.co/v1/chat/completions"
 
         headers = {
             "Authorization": f"Bearer {os.environ['HUGGINGFACEHUB_API_TOKEN']}",
@@ -70,6 +71,7 @@ Question:
         }
 
         payload = {
+            "model": "mistralai/Mistral-7B-Instruct-v0.2",
             "messages": [
                 {"role": "user", "content": prompt}
             ],
@@ -82,10 +84,8 @@ Question:
         if response.status_code == 200:
             result = response.json()
             answer = result["choices"][0]["message"]["content"]
-
             st.subheader("Answer")
             st.write(answer)
-
         else:
             st.error(f"Status Code: {response.status_code}")
             st.error(response.text)
