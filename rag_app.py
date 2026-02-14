@@ -8,7 +8,6 @@ from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_community.embeddings import HuggingFaceEmbeddings
 from langchain_community.vectorstores import FAISS
 
-
 # ---------------- PAGE SETTINGS ----------------
 st.set_page_config(page_title="Smart Document Q&A", layout="wide")
 st.title("📄 Smart Document Q&A System (Cloud Version)")
@@ -62,8 +61,9 @@ Question:
 {question}
 """
 
-        #  DIRECT HuggingFace Router API (Latest Working Method)
-        API_URL = "https://router.huggingface.co/hf-inference/models/mistralai/Mistral-7B-Instruct-v0.2"
+        # ---------------- HUGGINGFACE ROUTER API ----------------
+
+        API_URL = "https://router.huggingface.co/hf-inference/models/google/flan-t5-base"
 
         headers = {
             "Authorization": f"Bearer {os.environ['HUGGINGFACEHUB_API_TOKEN']}",
@@ -73,7 +73,7 @@ Question:
         payload = {
             "inputs": prompt,
             "parameters": {
-                "max_new_tokens": 512,
+                "max_new_tokens": 256,
                 "temperature": 0
             }
         }
@@ -86,4 +86,5 @@ Question:
             st.subheader("Answer")
             st.write(answer)
         else:
-            st.error(f"API Error: {response.text}")
+            st.error(f"Status Code: {response.status_code}")
+            st.error(response.text)
