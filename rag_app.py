@@ -1,16 +1,16 @@
 import streamlit as st
 import tempfile
 import os
-import requests
 
 from langchain_community.document_loaders import PyPDFLoader
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_community.embeddings import HuggingFaceEmbeddings
 from langchain_community.vectorstores import FAISS
+from langchain_community.llms import HuggingFaceHub
 
 
 st.set_page_config(page_title="Smart Document Q&A", layout="wide")
-st.title("📄 Smart Document Q&A System (Cloud Version)")
+st.title("📄 Smart Document Q&A System")
 
 uploaded_file = st.file_uploader("Upload a PDF", type="pdf")
 
@@ -51,9 +51,15 @@ if uploaded_file is not None:
         docs = vectorstore.similarity_search(question, k=3)
         context = "\n\n".join([doc.page_content for doc in docs])
 
-        prompt = f"""
-Use ONLY the context below to answer.
-If not found, say "Not found in document".
+        llm = HuggingFaceHub(
+            repo_id="google/flan-t5-base",
+            model_kwargs={"temperature": 0, "max_length": 512},
+            huggingfacehub_api_token=os.environ["HUGGINGFACEHUB_API_TOKEN"],
+        )
+
+        final_prompt = f"""
+Answer the question using ONLY the context below.
+If the answer is not found, say 'Not found in document'.
 
 Context:
 {context}
@@ -62,28 +68,7 @@ Question:
 {question}
 """
 
-        API_URL = "https://router.huggingface.co/hf-inference/models/HuggingFaceH4/zephyr-7b-beta"
+        response = llm(final_prompt)
 
-        headers = {
-            "Authorization": f"Bearer {os.environ['HUGGINGFACEHUB_API_TOKEN']}",
-            "Content-Type": "application/json"
-        }
-
-        payload = {
-            "inputs": prompt,
-            "parameters": {
-                "temperature": 0,
-                "max_new_tokens": 300
-            }
-        }
-
-        response = requests.post(API_URL, headers=headers, json=payload)
-
-        if response.status_code != 200:
-            st.error(f"API Error: {response.text}")
-        else:
-            result = response.json()
-            answer = result[0]["generated_text"]
-
-            st.subheader("Answer")
-            st.write(answer)
+        st.subheader("Answer")
+        st.write(response)
