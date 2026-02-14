@@ -14,7 +14,7 @@ st.title("📄 Smart Document Q&A System (Cloud Version)")
 
 uploaded_file = st.file_uploader("Upload a PDF", type="pdf")
 
-
+# ---------------- DOCUMENT PROCESSING ----------------
 @st.cache_resource
 def process_document(file_path):
     loader = PyPDFLoader(file_path)
@@ -61,9 +61,8 @@ Question:
 {question}
 """
 
-        # ---------------- HUGGINGFACE ROUTER API ----------------
-
-        API_URL = "https://router.huggingface.co/hf-inference/models/google/flan-t5-base"
+        # ---------------- HUGGINGFACE ROUTER CALL ----------------
+        API_URL = "https://router.huggingface.co/hf-inference/models/mistralai/Mistral-7B-Instruct-v0.2"
 
         headers = {
             "Authorization": f"Bearer {os.environ['HUGGINGFACEHUB_API_TOKEN']}",
@@ -71,20 +70,22 @@ Question:
         }
 
         payload = {
-            "inputs": prompt,
-            "parameters": {
-                "max_new_tokens": 256,
-                "temperature": 0
-            }
+            "messages": [
+                {"role": "user", "content": prompt}
+            ],
+            "max_tokens": 256,
+            "temperature": 0
         }
 
         response = requests.post(API_URL, headers=headers, json=payload)
 
         if response.status_code == 200:
             result = response.json()
-            answer = result[0]["generated_text"]
+            answer = result["choices"][0]["message"]["content"]
+
             st.subheader("Answer")
             st.write(answer)
+
         else:
             st.error(f"Status Code: {response.status_code}")
             st.error(response.text)
