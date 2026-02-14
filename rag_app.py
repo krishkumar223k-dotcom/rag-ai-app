@@ -1,7 +1,7 @@
 import streamlit as st
 import tempfile
-import requests
 import os
+import requests
 
 from langchain_community.document_loaders import PyPDFLoader
 from langchain_text_splitters import RecursiveCharacterTextSplitter
@@ -10,9 +10,11 @@ from langchain_community.vectorstores import FAISS
 
 # ---------------- PAGE SETTINGS ----------------
 st.set_page_config(page_title="Smart Document Q&A", layout="wide")
-st.title("📄 Smart Document Q&A System (Cloud Version)")
+st.title("📄 Smart Document Q&A System")
 
+# ---------------- FILE UPLOAD ----------------
 uploaded_file = st.file_uploader("Upload a PDF", type="pdf")
+
 
 @st.cache_resource
 def process_document(file_path):
@@ -20,8 +22,8 @@ def process_document(file_path):
     docs = loader.load()
 
     splitter = RecursiveCharacterTextSplitter(
-        chunk_size=500,
-        chunk_overlap=100
+        chunk_size=800,
+        chunk_overlap=200
     )
     split_docs = splitter.split_documents(docs)
 
@@ -33,9 +35,9 @@ def process_document(file_path):
     return vectorstore
 
 
+# ---------------- MAIN LOGIC ----------------
 if uploaded_file is not None:
 
-    # Save temp file
     with tempfile.NamedTemporaryFile(delete=False) as tmp_file:
         tmp_file.write(uploaded_file.read())
         tmp_path = tmp_file.name
@@ -47,45 +49,48 @@ if uploaded_file is not None:
 
     if question:
 
-        # Get relevant chunks
-        docs = vectorstore.similarity_search(question, k=3)
+        # Retrieve more chunks for better matching
+        docs = vectorstore.similarity_search(question, k=8)
         context = "\n\n".join([doc.page_content for doc in docs])
 
-        prompt = f"""
-Answer the question using ONLY the context below.
-If the answer is not found, say 'Not found in document'.
-
-Context:
-{context}
-
-Question:
-{question}
-"""
-
-        #Correct HuggingFace Router API
-        API_URL = "https://router.huggingface.co/v1/chat/completions"
+        # HuggingFace Router Endpoint (LATEST)
+        API_URL = "https://router.huggingface.co/hf-inference/models/google/flan-t5-base"
 
         headers = {
             "Authorization": f"Bearer {os.environ['HUGGINGFACEHUB_API_TOKEN']}",
             "Content-Type": "application/json"
         }
 
+        prompt = f"""
+You are answering questions using ONLY the context below.
+
+If the answer exists in the context, return it clearly.
+If not, say 'Not found in document'.
+
+Context:
+{context}
+
+Question:
+{question}
+
+Answer:
+"""
+
         payload = {
-            "model": "mistralai/Mistral-7B-Instruct-v0.2",
-            "messages": [
-                {"role": "user", "content": prompt}
-            ],
-            "max_tokens": 256,
-            "temperature": 0
+            "inputs": prompt,
+            "parameters": {
+                "temperature": 0,
+                "max_new_tokens": 256
+            }
         }
 
         response = requests.post(API_URL, headers=headers, json=payload)
 
         if response.status_code == 200:
             result = response.json()
-            answer = result["choices"][0]["message"]["content"]
-            st.subheader("Answer")
-            st.write(answer)
+            answer = result[0]["generated_text"]
         else:
-            st.error(f"Status Code: {response.status_code}")
-            st.error(response.text)
+            answer = f"API Error: {response.status_code} - {response.text}"
+
+        st.subheader("Answer")
+        st.write(answer)
