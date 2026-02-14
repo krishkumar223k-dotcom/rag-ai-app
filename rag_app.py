@@ -9,31 +9,23 @@ from langchain_community.embeddings import HuggingFaceEmbeddings
 from langchain_community.vectorstores import FAISS
 
 # ---------------- PAGE SETTINGS ----------------
-st.set_page_config(page_title="AI Resume Analyzer + Multi PDF Chat", layout="wide")
-st.title("🚀 AI Resume Analyzer & Multi-Document Chat")
+st.set_page_config(page_title="Smart Document Q&A", layout="wide")
+st.title("📄 Smart Document Q&A System (Cloud Version)")
 
-uploaded_files = st.file_uploader(
-    "Upload one or more PDFs",
-    type="pdf",
-    accept_multiple_files=True
-)
+uploaded_file = st.file_uploader("Upload a PDF", type="pdf")
 
 # ---------------- DOCUMENT PROCESSING ----------------
 @st.cache_resource
-def process_documents(file_paths):
-    all_docs = []
-
-    for path in file_paths:
-        loader = PyPDFLoader(path)
-        docs = loader.load()
-        all_docs.extend(docs)
+def process_document(file_path):
+    loader = PyPDFLoader(file_path)
+    docs = loader.load()
 
     splitter = RecursiveCharacterTextSplitter(
-        chunk_size=1000,
+        chunk_size=800,
         chunk_overlap=200
     )
 
-    split_docs = splitter.split_documents(all_docs)
+    split_docs = splitter.split_documents(docs)
 
     embeddings = HuggingFaceEmbeddings(
         model_name="sentence-transformers/all-MiniLM-L6-v2"
@@ -43,81 +35,41 @@ def process_documents(file_paths):
     return vectorstore
 
 
-if uploaded_files:
+if uploaded_file is not None:
 
-    temp_paths = []
+    # Save uploaded file temporarily
+    with tempfile.NamedTemporaryFile(delete=False) as tmp_file:
+        tmp_file.write(uploaded_file.read())
+        tmp_path = tmp_file.name
 
-    for uploaded_file in uploaded_files:
-        with tempfile.NamedTemporaryFile(delete=False) as tmp_file:
-            tmp_file.write(uploaded_file.read())
-            temp_paths.append(tmp_file.name)
+    vectorstore = process_document(tmp_path)
+    st.success("Document processed successfully!")
 
-    vectorstore = process_documents(temp_paths)
-    st.success("Documents processed successfully!")
+    question = st.text_input("Ask a question about your document")
 
-    mode = st.selectbox(
-        "Choose Mode",
-        ["Chat with Documents", "Resume Scoring (1–10)", "ATS Match System"]
-    )
+    if question:
 
-    user_input = st.text_area("Enter your question or job description")
+        docs = vectorstore.similarity_search(question, k=5)
 
-    if user_input:
-
-        docs = vectorstore.similarity_search(user_input, k=6)
         context = "\n\n".join([doc.page_content for doc in docs])
 
-        # ---------------- MODE PROMPTS ----------------
-        if mode == "Chat with Documents":
-            prompt = f"""
-You are an AI document assistant.
+        prompt = f"""
+You are an intelligent document assistant.
 
-Answer strictly using the context.
-If not found, say 'Not found in document.'
+Answer the question strictly using the context below.
+If the answer is not present in the context, say:
+"Not found in document."
 
 Context:
 {context}
 
 Question:
-{user_input}
+{question}
+
 Answer:
 """
 
-        elif mode == "Resume Scoring (1–10)":
-            prompt = f"""
-You are a professional HR evaluator.
-
-Based on the resume below, give:
-
-1. Resume Score (1–10)
-2. Strengths
-3. Weaknesses
-4. Suggestions for improvement
-
-Resume:
-{context}
-"""
-
-        elif mode == "ATS Match System":
-            prompt = f"""
-You are an ATS system.
-
-Compare the resume with the job description.
-
-Return:
-1. Match Percentage (0–100%)
-2. Missing Keywords
-3. Matching Skills
-4. Improvement Suggestions
-
-Resume:
-{context}
-
-Job Description:
-{user_input}
-"""
-
-        # ---------------- HF ROUTER API ----------------
+        # ---------------- HUGGINGFACE ROUTER API ----------------
         API_URL = "https://router.huggingface.co/hf-inference/models/mistralai/Mistral-7B-Instruct-v0.2"
 
         headers = {
@@ -127,7 +79,7 @@ Job Description:
         payload = {
             "inputs": prompt,
             "parameters": {
-                "max_new_tokens": 600,
+                "max_new_tokens": 400,
                 "temperature": 0.2,
                 "return_full_text": False
             }
@@ -141,5 +93,5 @@ Job Description:
         else:
             answer = f"API Error: {response.status_code} - {response.text}"
 
-        st.subheader("Result")
+        st.subheader("Answer")
         st.write(answer)
