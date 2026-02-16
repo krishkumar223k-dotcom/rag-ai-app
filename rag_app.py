@@ -2,15 +2,14 @@ import streamlit as st
 import tempfile
 import os
 import requests
-
 from langchain_community.document_loaders import PyPDFLoader
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_community.embeddings import HuggingFaceEmbeddings
 from langchain_community.vectorstores import FAISS
 
-# ---------------- PAGE CONFIG ----------------
+# ---------------- PAGE SETTINGS ----------------
 st.set_page_config(page_title="Smart Resume Analyzer", layout="wide")
-st.title("🚀 AI Resume Analyzer + Multi PDF Chat")
+st.title("📄 Smart Resume Analyzer + Multi PDF Chat")
 
 uploaded_files = st.file_uploader(
     "Upload one or more PDFs",
@@ -18,25 +17,18 @@ uploaded_files = st.file_uploader(
     accept_multiple_files=True
 )
 
-mode = st.selectbox(
-    "Choose Mode",
-    ["Document Q&A", "Resume Scoring (1–10)", "ATS Match System"]
-)
-
-# ---------------- PROCESS DOCUMENTS ----------------
+# ---------------- DOCUMENT PROCESSING ----------------
 @st.cache_resource
-def process_documents(files):
+def process_documents(file_paths):
     all_docs = []
 
-    for file in files:
-        with tempfile.NamedTemporaryFile(delete=False) as tmp:
-            tmp.write(file.read())
-            loader = PyPDFLoader(tmp.name)
-            docs = loader.load()
-            all_docs.extend(docs)
+    for path in file_paths:
+        loader = PyPDFLoader(path)
+        docs = loader.load()
+        all_docs.extend(docs)
 
     splitter = RecursiveCharacterTextSplitter(
-        chunk_size=800,
+        chunk_size=700,
         chunk_overlap=150
     )
 
@@ -50,18 +42,22 @@ def process_documents(files):
     return vectorstore
 
 
-# ---------------- HF ROUTER CONFIG ----------------
-API_URL = "https://router.huggingface.co/hf-inference/models/HuggingFaceH4/zephyr-7b-beta"
-
-headers = {
-    "Authorization": f"Bearer {os.environ['HUGGINGFACEHUB_API_TOKEN']}"
-}
-
-# ---------------- MAIN ----------------
 if uploaded_files:
 
-    vectorstore = process_documents(uploaded_files)
+    temp_paths = []
+
+    for file in uploaded_files:
+        with tempfile.NamedTemporaryFile(delete=False) as tmp:
+            tmp.write(file.read())
+            temp_paths.append(tmp.name)
+
+    vectorstore = process_documents(temp_paths)
     st.success("Documents processed successfully!")
+
+    mode = st.selectbox(
+        "Choose Mode",
+        ["Normal Q&A", "Resume Scoring (1–10)", "ATS Match System"]
+    )
 
     user_input = st.text_area("Enter your question or job description")
 
@@ -70,11 +66,39 @@ if uploaded_files:
         docs = vectorstore.similarity_search(user_input, k=5)
         context = "\n\n".join([doc.page_content for doc in docs])
 
-        # Mode-based prompt
-        if mode == "Document Q&A":
+        if mode == "Resume Scoring (1–10)":
             prompt = f"""
-Answer using ONLY the context below.
-If answer not found, say 'Not found in document'.
+You are a professional resume evaluator.
+
+Based on the resume below, give:
+1. Score from 1–10
+2. Strengths
+3. Weaknesses
+4. Improvement suggestions
+
+Resume:
+{context}
+"""
+        elif mode == "ATS Match System":
+            prompt = f"""
+You are an ATS system.
+
+Compare the resume with the job description.
+Give:
+1. ATS Match Percentage
+2. Missing Skills
+3. Keywords to Add
+
+Resume:
+{context}
+
+Job Description:
+{user_input}
+"""
+        else:
+            prompt = f"""
+Answer the question using ONLY the context below.
+If not found, say 'Not found in document'.
 
 Context:
 {context}
@@ -83,44 +107,19 @@ Question:
 {user_input}
 """
 
-        elif mode == "Resume Scoring (1–10)":
-            prompt = f"""
-You are a resume evaluator.
+        # ---------------- HF ROUTER CALL ----------------
+        API_URL = "https://router.huggingface.co/hf-inference/models/HuggingFaceH4/zephyr-7b-beta"
 
-Based on the resume below, give:
-1. Resume score from 1 to 10
-2. Strengths
-3. Weaknesses
-4. Improvement suggestions
-
-Resume:
-{context}
-"""
-
-        else:  # ATS Match
-            prompt = f"""
-You are an ATS system.
-
-Compare the resume with the job description.
-
-Resume:
-{context}
-
-Job Description:
-{user_input}
-
-Give:
-1. ATS Match Percentage
-2. Missing Keywords
-3. Matching Skills
-4. Suggestions to improve match
-"""
+        headers = {
+            "Authorization": f"Bearer {os.environ['HUGGINGFACEHUB_API_TOKEN']}",
+            "Content-Type": "application/json"
+        }
 
         payload = {
             "inputs": prompt,
             "parameters": {
-                "max_new_tokens": 600,
-                "temperature": 0.3,
+                "max_new_tokens": 700,
+                "temperature": 0.2,
                 "return_full_text": False
             }
         }
