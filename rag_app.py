@@ -118,7 +118,7 @@ Job Description:
 """
 
         # ---------------- HF ROUTER API ----------------
-        API_URL = "https://router.huggingface.co/hf-inference/models/mistralai/Mistral-7B-Instruct-v0.2"
+        API_URL = "https://router.huggingface.co/hf-inference/models/HuggingFaceH4/zephyr-7b-beta"
 
         headers = {
             "Authorization": f"Bearer {os.environ['HUGGINGFACEHUB_API_TOKEN']}"
@@ -137,7 +137,7 @@ Job Description:
 
         if response.status_code == 200:
             result = response.json()
-            answer = result[0]["generated_text"]
+            answer = result[0].get("generated_text", str(result))
         else:
             answer = f"API Error: {response.status_code} - {response.text}"
 
