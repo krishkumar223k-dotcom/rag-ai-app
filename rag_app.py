@@ -8,9 +8,9 @@ from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_community.embeddings import HuggingFaceEmbeddings
 from langchain_community.vectorstores import FAISS
 
-# ---------------- PAGE SETTINGS ----------------
-st.set_page_config(page_title="AI Resume Analyzer + Multi PDF Chat", layout="wide")
-st.title("🚀 AI Resume Analyzer & Multi-Document Chat")
+# ---------------- PAGE CONFIG ----------------
+st.set_page_config(page_title="Smart Resume Analyzer", layout="wide")
+st.title("🚀 AI Resume Analyzer + Multi PDF Chat")
 
 uploaded_files = st.file_uploader(
     "Upload one or more PDFs",
@@ -18,19 +18,26 @@ uploaded_files = st.file_uploader(
     accept_multiple_files=True
 )
 
-# ---------------- DOCUMENT PROCESSING ----------------
+mode = st.selectbox(
+    "Choose Mode",
+    ["Document Q&A", "Resume Scoring (1–10)", "ATS Match System"]
+)
+
+# ---------------- PROCESS DOCUMENTS ----------------
 @st.cache_resource
-def process_documents(file_paths):
+def process_documents(files):
     all_docs = []
 
-    for path in file_paths:
-        loader = PyPDFLoader(path)
-        docs = loader.load()
-        all_docs.extend(docs)
+    for file in files:
+        with tempfile.NamedTemporaryFile(delete=False) as tmp:
+            tmp.write(file.read())
+            loader = PyPDFLoader(tmp.name)
+            docs = loader.load()
+            all_docs.extend(docs)
 
     splitter = RecursiveCharacterTextSplitter(
-        chunk_size=1000,
-        chunk_overlap=200
+        chunk_size=800,
+        chunk_overlap=150
     )
 
     split_docs = splitter.split_documents(all_docs)
@@ -43,92 +50,77 @@ def process_documents(file_paths):
     return vectorstore
 
 
+# ---------------- HF ROUTER CONFIG ----------------
+API_URL = "https://router.huggingface.co/hf-inference/models/HuggingFaceH4/zephyr-7b-beta"
+
+headers = {
+    "Authorization": f"Bearer {os.environ['HUGGINGFACEHUB_API_TOKEN']}"
+}
+
+# ---------------- MAIN ----------------
 if uploaded_files:
 
-    temp_paths = []
-
-    for uploaded_file in uploaded_files:
-        with tempfile.NamedTemporaryFile(delete=False) as tmp_file:
-            tmp_file.write(uploaded_file.read())
-            temp_paths.append(tmp_file.name)
-
-    vectorstore = process_documents(temp_paths)
+    vectorstore = process_documents(uploaded_files)
     st.success("Documents processed successfully!")
-
-    mode = st.selectbox(
-        "Choose Mode",
-        ["Chat with Documents", "Resume Scoring (1–10)", "ATS Match System"]
-    )
 
     user_input = st.text_area("Enter your question or job description")
 
     if user_input:
 
-        docs = vectorstore.similarity_search(user_input, k=6)
+        docs = vectorstore.similarity_search(user_input, k=5)
         context = "\n\n".join([doc.page_content for doc in docs])
 
-        # ---------------- MODE PROMPTS ----------------
-        if mode == "Chat with Documents":
+        # Mode-based prompt
+        if mode == "Document Q&A":
             prompt = f"""
-You are an AI document assistant.
-
-Answer strictly using the context.
-If not found, say 'Not found in document.'
+Answer using ONLY the context below.
+If answer not found, say 'Not found in document'.
 
 Context:
 {context}
 
 Question:
 {user_input}
-Answer:
 """
 
         elif mode == "Resume Scoring (1–10)":
             prompt = f"""
-You are a professional HR evaluator.
+You are a resume evaluator.
 
 Based on the resume below, give:
-
-1. Resume Score (1–10)
+1. Resume score from 1 to 10
 2. Strengths
 3. Weaknesses
-4. Suggestions for improvement
+4. Improvement suggestions
 
 Resume:
 {context}
 """
 
-        elif mode == "ATS Match System":
+        else:  # ATS Match
             prompt = f"""
 You are an ATS system.
 
 Compare the resume with the job description.
-
-Return:
-1. Match Percentage (0–100%)
-2. Missing Keywords
-3. Matching Skills
-4. Improvement Suggestions
 
 Resume:
 {context}
 
 Job Description:
 {user_input}
+
+Give:
+1. ATS Match Percentage
+2. Missing Keywords
+3. Matching Skills
+4. Suggestions to improve match
 """
-
-        # ---------------- HF ROUTER API ----------------
-        API_URL = "https://router.huggingface.co/hf-inference/models/HuggingFaceH4/zephyr-7b-beta"
-
-        headers = {
-            "Authorization": f"Bearer {os.environ['HUGGINGFACEHUB_API_TOKEN']}"
-        }
 
         payload = {
             "inputs": prompt,
             "parameters": {
                 "max_new_tokens": 600,
-                "temperature": 0.2,
+                "temperature": 0.3,
                 "return_full_text": False
             }
         }
@@ -137,7 +129,7 @@ Job Description:
 
         if response.status_code == 200:
             result = response.json()
-            answer = result[0].get("generated_text", str(result))
+            answer = result[0]["generated_text"]
         else:
             answer = f"API Error: {response.status_code} - {response.text}"
 
