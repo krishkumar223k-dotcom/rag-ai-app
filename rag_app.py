@@ -118,7 +118,7 @@ Job Description:
 """
 
         # ---------------- HF ROUTER API ----------------
-        API_URL = "https://router.huggingface.co/hf-inference/models/HuggingFaceH4/zephyr-7b-beta"
+        API_URL = "https://router.huggingface.co/hf-inference/models/microsoft/Phi-3-mini-4k-instruct"
 
         headers = {
             "Authorization": f"Bearer {hf_token}",
