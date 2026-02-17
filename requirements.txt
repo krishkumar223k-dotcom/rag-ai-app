@@ -5,5 +5,5 @@ langchain-text-splitters
 faiss-cpu
 sentence-transformers
 pypdf
-transformers
-torch
+requests
+
