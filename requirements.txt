@@ -1,9 +1,6 @@
 streamlit
-langchain
-langchain-community
-langchain-text-splitters
-faiss-cpu
-sentence-transformers
-pypdf
 requests
-
+sentence-transformers
+faiss-cpu
+numpy
+PyPDF2
