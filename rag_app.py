@@ -8,18 +8,17 @@ from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_community.embeddings import HuggingFaceEmbeddings
 from langchain_community.vectorstores import FAISS
 
-# ---------------- PAGE CONFIG ----------------
+# ---------------- PAGE SETTINGS ----------------
 st.set_page_config(page_title="Smart Document AI", layout="wide")
 st.title("📄 Smart Document AI (Multi-PDF + Accurate Version)")
 
-# ---------------- TOKEN DEBUG ----------------
-st.write("Token Loaded:", "HUGGINGFACEHUB_API_TOKEN" in os.environ)
-
-hf_token = os.getenv("HUGGINGFACEHUB_API_TOKEN")
-
-if not hf_token:
+# ---------------- CHECK TOKEN ----------------
+if "HUGGINGFACEHUB_API_TOKEN" not in os.environ:
     st.error("❌ HuggingFace token not found in Secrets.")
     st.stop()
+
+HF_TOKEN = os.environ["HUGGINGFACEHUB_API_TOKEN"]
+st.success("✅ Token Loaded Successfully")
 
 # ---------------- FILE UPLOAD ----------------
 uploaded_files = st.file_uploader(
@@ -28,14 +27,13 @@ uploaded_files = st.file_uploader(
     accept_multiple_files=True
 )
 
-# ---------------- DOCUMENT PROCESSING ----------------
 @st.cache_resource
 def process_documents(files):
     all_docs = []
 
-    for uploaded_file in files:
+    for file in files:
         with tempfile.NamedTemporaryFile(delete=False) as tmp_file:
-            tmp_file.write(uploaded_file.read())
+            tmp_file.write(file.read())
             tmp_path = tmp_file.name
 
         loader = PyPDFLoader(tmp_path)
@@ -43,8 +41,8 @@ def process_documents(files):
         all_docs.extend(docs)
 
     splitter = RecursiveCharacterTextSplitter(
-        chunk_size=700,
-        chunk_overlap=150
+        chunk_size=800,
+        chunk_overlap=200
     )
 
     split_docs = splitter.split_documents(all_docs)
@@ -60,87 +58,50 @@ def process_documents(files):
 if uploaded_files:
 
     vectorstore = process_documents(uploaded_files)
-    st.success("✅ Documents processed successfully!")
+    st.success("📄 Documents processed successfully!")
 
-    mode = st.selectbox(
-        "Choose Mode",
-        ["Ask Question", "Resume Scoring (1–10)", "ATS Match System"]
-    )
+    question = st.text_area("Enter your question")
 
-    user_input = st.text_area("Enter your question or job description")
+    if question:
 
-    if user_input:
-
-        docs = vectorstore.similarity_search(user_input, k=5)
+        # -------- RETRIEVE CONTEXT --------
+        docs = vectorstore.similarity_search(question, k=5)
         context = "\n\n".join([doc.page_content for doc in docs])
 
-        if mode == "Ask Question":
-            prompt = f"""
-Answer ONLY from the context below.
-If not found, say 'Not found in document'.
-
-Context:
-{context}
-
-Question:
-{user_input}
-"""
-
-        elif mode == "Resume Scoring (1–10)":
-            prompt = f"""
-You are a professional HR evaluator.
-
-Based on the resume content below,
-give a resume score from 1 to 10.
-
-Explain strengths and weaknesses clearly.
-
-Resume Content:
-{context}
-"""
-
-        else:  # ATS Mode
-            prompt = f"""
-You are an ATS system.
-
-Compare this resume with the job description.
-
-Give:
-- Match percentage
-- Missing skills
-- Improvement suggestions
-
-Resume:
-{context}
-
-Job Description:
-{user_input}
-"""
-
-        # ---------------- HF ROUTER API ----------------
-        API_URL = "https://router.huggingface.co/hf-inference/models/microsoft/Phi-3-mini-4k-instruct"
+        # -------- HUGGINGFACE ROUTER API --------
+        API_URL = "https://router.huggingface.co/v1/chat/completions"
 
         headers = {
-            "Authorization": f"Bearer {hf_token}",
+            "Authorization": f"Bearer {HF_TOKEN}",
             "Content-Type": "application/json"
         }
 
         payload = {
-            "inputs": prompt,
-            "parameters": {
-                "max_new_tokens": 700,
-                "temperature": 0.2,
-                "return_full_text": False
-            }
+            "model": "HuggingFaceH4/zephyr-7b-beta",
+            "messages": [
+                {
+                    "role": "system",
+                    "content": "Answer ONLY from the provided context. If not found, say 'Not found in document.'"
+                },
+                {
+                    "role": "user",
+                    "content": f"Context:\n{context}\n\nQuestion:\n{question}"
+                }
+            ],
+            "temperature": 0.2,
+            "max_tokens": 600
         }
 
         response = requests.post(API_URL, headers=headers, json=payload)
 
+        # -------- DEBUG RESPONSE --------
+        st.write("🔎 Status Code:", response.status_code)
+
         if response.status_code == 200:
             result = response.json()
-            answer = result[0]["generated_text"]
+            answer = result["choices"][0]["message"]["content"]
         else:
-            answer = f"API Error: {response.status_code}\n\n{response.text}"
+            answer = f"API Error: {response.status_code}\n{response.text}"
 
         st.subheader("Result")
         st.write(answer)
