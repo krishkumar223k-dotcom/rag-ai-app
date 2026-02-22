@@ -132,9 +132,9 @@ if not user_input.strip():
 # =====================================
 
 query_vector = model.encode([user_input])
-D, I = index.search(np.array(query_vector), k=3)
+D, I = index.search(np.array(query_vector), k=5)
 
-threshold = 1.2
+threshold = 1.6
 relevant_chunks = []
 
 for distance, idx in zip(D[0], I[0]):
