@@ -16,8 +16,8 @@ import io
 # =====================================
 
 st.set_page_config(page_title="Smart Document AI", layout="wide")
-st.title("📄 Smart Document AI (Production Version)")
-st.caption("RAG + Resume Scoring + ATS Matching")
+st.title("📄 Smart Document AI")
+st.caption("Hybrid RAG • Resume Scoring • ATS Matching • Clean GPT Style")
 
 # =====================================
 # CHECK TOKEN
@@ -26,7 +26,7 @@ st.caption("RAG + Resume Scoring + ATS Matching")
 HF_TOKEN = os.environ.get("HUGGINGFACEHUB_API_TOKEN")
 
 if not HF_TOKEN:
-    st.error("HuggingFace token not found in Secrets.")
+    st.error("HuggingFace token not found.")
     st.stop()
 
 # =====================================
@@ -60,13 +60,13 @@ for uploaded_file in uploaded_files:
                 all_text += text + "\n"
 
 if len(all_text.strip()) == 0:
-    st.error("❌ This PDF contains no extractable text (possibly scanned).")
+    st.error("This PDF contains no extractable text.")
     st.stop()
 
 st.success("Documents processed successfully.")
 
 # =====================================
-# LOAD EMBEDDING MODEL (Cached)
+# LOAD EMBEDDING MODEL
 # =====================================
 
 @st.cache_resource
@@ -76,35 +76,33 @@ def load_model():
 model = load_model()
 
 # =====================================
-# SMART CHUNKING (OVERLAP)
+# SMART CHUNKING WITH OVERLAP
 # =====================================
 
 chunk_size = 800
 overlap = 150
 
 chunks = []
-
 for i in range(0, len(all_text), chunk_size - overlap):
     chunk = all_text[i:i+chunk_size]
     if len(chunk.strip()) > 50:
         chunks.append(chunk)
 
 if len(chunks) == 0:
-    st.error("Could not create meaningful text chunks.")
+    st.error("Could not create meaningful chunks.")
     st.stop()
 
 # =====================================
-# VECTOR EMBEDDING + FAISS
+# VECTOR STORE
 # =====================================
 
 embeddings = model.encode(chunks)
-
 dimension = embeddings.shape[1]
 index = faiss.IndexFlatL2(dimension)
 index.add(np.array(embeddings))
 
 # =====================================
-# MODE SELECTION
+# MODE
 # =====================================
 
 mode = st.selectbox(
@@ -113,7 +111,7 @@ mode = st.selectbox(
 )
 
 # =====================================
-# MOBILE FRIENDLY FORM
+# INPUT FORM
 # =====================================
 
 with st.form("query_form"):
@@ -128,15 +126,39 @@ if not user_input.strip():
     st.stop()
 
 # =====================================
-# SEMANTIC RETRIEVAL (FILTERED)
+# FAST KEYWORD SEARCH (FIXES CGPA ISSUE)
+# =====================================
+
+if mode == "Ask Question":
+    keyword = user_input.strip().lower().replace("?", "")
+
+    if len(keyword.split()) <= 2:
+        if keyword in all_text.lower():
+            lines = all_text.split("\n")
+            for line in lines:
+                if keyword in line.lower():
+                    st.subheader("📌 Result")
+                    clean_line = line.strip()
+                    st.success("Response Generated Successfully")
+                    st.write(clean_line)
+                    st.stop()
+
+# =====================================
+# ADAPTIVE SEMANTIC RETRIEVAL
 # =====================================
 
 query_vector = model.encode([user_input])
-D, I = index.search(np.array(query_vector), k=5)
 
-threshold = 1.6
+if len(user_input.split()) <= 2:
+    k_value = 6
+    threshold = 1.8
+else:
+    k_value = 4
+    threshold = 1.5
+
+D, I = index.search(np.array(query_vector), k=k_value)
+
 relevant_chunks = []
-
 for distance, idx in zip(D[0], I[0]):
     if distance < threshold:
         relevant_chunks.append(chunks[idx])
@@ -148,33 +170,33 @@ if len(relevant_chunks) == 0:
 retrieved_context = "\n\n".join(relevant_chunks)
 
 # =====================================
-# STRICT PROMPT
+# STRICT GPT STYLE PROMPT
 # =====================================
 
 if mode == "Ask Question":
 
     prompt = f"""
-You are a strict document assistant.
+You are a precise document extraction assistant.
 
 Rules:
-- Answer ONLY using the context below.
-- Do NOT use outside knowledge.
-- If answer is not clearly present, reply exactly:
+- Return ONLY the direct answer.
+- Do NOT explain.
+- Do NOT add extra text.
+- If answer not present, reply exactly:
   Not found in document.
-- Do not guess.
 
 Context:
 {retrieved_context}
 
 Question:
 {user_input}
+
+Return only the final answer.
 """
 
 elif mode == "Resume Scoring (1–10)":
 
     prompt = f"""
-You are a professional resume evaluator.
-
 Provide:
 1. Resume score (1–10)
 2. Strengths
@@ -188,8 +210,6 @@ Resume:
 elif mode == "ATS Match":
 
     prompt = f"""
-Compare this resume with the job description.
-
 Return:
 1. ATS match percentage
 2. Missing keywords
@@ -203,7 +223,7 @@ Job Description:
 """
 
 # =====================================
-# HUGGING FACE ROUTER CALL
+# HUGGING FACE API CALL
 # =====================================
 
 API_URL = "https://router.huggingface.co/v1/chat/completions"
@@ -216,8 +236,8 @@ headers = {
 payload = {
     "model": "HuggingFaceH4/zephyr-7b-beta:featherless-ai",
     "messages": [{"role": "user", "content": prompt}],
-    "temperature": 0.1,  # low temperature = less hallucination
-    "max_tokens": 700
+    "temperature": 0.1,
+    "max_tokens": 200
 }
 
 with st.spinner("Generating response..."):
@@ -227,7 +247,11 @@ st.subheader("📌 Result")
 
 if response.status_code == 200:
     result = response.json()
-    answer = result["choices"][0]["message"]["content"]
+    answer = result["choices"][0]["message"]["content"].strip()
+
+    # Clean extra lines
+    answer = answer.split("\n")[0]
+
     st.success("Response Generated Successfully")
     st.write(answer)
 
