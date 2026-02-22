@@ -6,55 +6,32 @@ from PyPDF2 import PdfReader
 from sentence_transformers import SentenceTransformer
 import faiss
 import numpy as np
-from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer
-from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
-from reportlab.lib import colors
+from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Preformatted
+from reportlab.lib.styles import getSampleStyleSheet
 from reportlab.lib.units import inch
-from reportlab.platypus import Preformatted
-from reportlab.pdfbase.ttfonts import TTFont
-from reportlab.pdfbase import pdfmetrics
 import io
 
-# ==============================
+# =====================================
 # PAGE CONFIG
-# ==============================
+# =====================================
 
-st.set_page_config(
-    page_title="Smart Document AI",
-    page_icon="📄",
-    layout="wide"
-)
+st.set_page_config(page_title="Smart Document AI", layout="wide")
+st.title("📄 Smart Document AI (Production Version)")
+st.caption("RAG + Resume Scoring + ATS Matching")
 
-st.title("📄 Smart Document AI")
-st.caption("Multi-PDF • Resume Analyzer • ATS Matching • Production Version")
-
-# ==============================
-# LOAD TOKEN
-# ==============================
+# =====================================
+# CHECK TOKEN
+# =====================================
 
 HF_TOKEN = os.environ.get("HUGGINGFACEHUB_API_TOKEN")
 
 if not HF_TOKEN:
-    st.error("❌ HuggingFace token not found in Secrets.")
+    st.error("HuggingFace token not found in Secrets.")
     st.stop()
 
-# ==============================
-# SIDEBAR SETTINGS
-# ==============================
-
-st.sidebar.header("⚙️ Settings")
-
-mode = st.sidebar.selectbox(
-    "Select Mode",
-    ["Ask Question", "Resume Scoring (1–10)", "ATS Match"]
-)
-
-temperature = st.sidebar.slider("Creativity", 0.0, 1.0, 0.3)
-max_tokens = st.sidebar.slider("Max Response Length", 200, 1500, 700)
-
-# ==============================
+# =====================================
 # FILE UPLOAD
-# ==============================
+# =====================================
 
 uploaded_files = st.file_uploader(
     "Upload one or more PDFs",
@@ -63,12 +40,12 @@ uploaded_files = st.file_uploader(
 )
 
 if not uploaded_files:
-    st.info("Upload PDFs to begin.")
+    st.info("Upload at least one PDF to begin.")
     st.stop()
 
-# ==============================
+# =====================================
 # EXTRACT TEXT
-# ==============================
+# =====================================
 
 all_text = ""
 
@@ -76,39 +53,71 @@ for uploaded_file in uploaded_files:
     with tempfile.NamedTemporaryFile(delete=False) as tmp:
         tmp.write(uploaded_file.read())
         reader = PdfReader(tmp.name)
+
         for page in reader.pages:
             text = page.extract_text()
             if text:
                 all_text += text + "\n"
 
+if len(all_text.strip()) == 0:
+    st.error("❌ This PDF contains no extractable text (possibly scanned).")
+    st.stop()
+
 st.success("Documents processed successfully.")
 
-# ==============================
-# EMBEDDINGS + VECTOR SEARCH
-# ==============================
+# =====================================
+# LOAD EMBEDDING MODEL (Cached)
+# =====================================
 
 @st.cache_resource
-def load_embedding_model():
+def load_model():
     return SentenceTransformer("sentence-transformers/all-MiniLM-L6-v2")
 
-model = load_embedding_model()
+model = load_model()
 
-chunks = [all_text[i:i+800] for i in range(0, len(all_text), 800)]
+# =====================================
+# SMART CHUNKING (OVERLAP)
+# =====================================
+
+chunk_size = 800
+overlap = 150
+
+chunks = []
+
+for i in range(0, len(all_text), chunk_size - overlap):
+    chunk = all_text[i:i+chunk_size]
+    if len(chunk.strip()) > 50:
+        chunks.append(chunk)
+
+if len(chunks) == 0:
+    st.error("Could not create meaningful text chunks.")
+    st.stop()
+
+# =====================================
+# VECTOR EMBEDDING + FAISS
+# =====================================
+
 embeddings = model.encode(chunks)
 
 dimension = embeddings.shape[1]
 index = faiss.IndexFlatL2(dimension)
 index.add(np.array(embeddings))
 
-# ==============================
-# INPUT FORM
-# ==============================
+# =====================================
+# MODE SELECTION
+# =====================================
+
+mode = st.selectbox(
+    "Choose Mode",
+    ["Ask Question", "Resume Scoring (1–10)", "ATS Match"]
+)
+
+# =====================================
+# MOBILE FRIENDLY FORM
+# =====================================
 
 with st.form("query_form"):
-    user_input = st.text_area(
-        "Enter your question or job description",
-        height=150
-    )
+    user_input = st.text_area("Enter your question or job description", height=150)
     submitted = st.form_submit_button("🚀 Generate")
 
 if not submitted:
@@ -118,22 +127,41 @@ if not user_input.strip():
     st.warning("Please enter something.")
     st.stop()
 
-# ==============================
-# RETRIEVE CONTEXT
-# ==============================
+# =====================================
+# SEMANTIC RETRIEVAL (FILTERED)
+# =====================================
 
 query_vector = model.encode([user_input])
-D, I = index.search(np.array(query_vector), k=5)
-retrieved_context = "\n\n".join([chunks[i] for i in I[0]])
+D, I = index.search(np.array(query_vector), k=3)
 
-# ==============================
-# PROMPT BUILDING
-# ==============================
+threshold = 1.2
+relevant_chunks = []
+
+for distance, idx in zip(D[0], I[0]):
+    if distance < threshold:
+        relevant_chunks.append(chunks[idx])
+
+if len(relevant_chunks) == 0:
+    st.warning("Not found in document.")
+    st.stop()
+
+retrieved_context = "\n\n".join(relevant_chunks)
+
+# =====================================
+# STRICT PROMPT
+# =====================================
 
 if mode == "Ask Question":
+
     prompt = f"""
-Answer strictly using the context below.
-If answer not present, say: Not found in document.
+You are a strict document assistant.
+
+Rules:
+- Answer ONLY using the context below.
+- Do NOT use outside knowledge.
+- If answer is not clearly present, reply exactly:
+  Not found in document.
+- Do not guess.
 
 Context:
 {retrieved_context}
@@ -143,6 +171,7 @@ Question:
 """
 
 elif mode == "Resume Scoring (1–10)":
+
     prompt = f"""
 You are a professional resume evaluator.
 
@@ -157,6 +186,7 @@ Resume:
 """
 
 elif mode == "ATS Match":
+
     prompt = f"""
 Compare this resume with the job description.
 
@@ -172,9 +202,9 @@ Job Description:
 {user_input}
 """
 
-# ==============================
-# HUGGINGFACE ROUTER CALL
-# ==============================
+# =====================================
+# HUGGING FACE ROUTER CALL
+# =====================================
 
 API_URL = "https://router.huggingface.co/v1/chat/completions"
 
@@ -186,16 +216,12 @@ headers = {
 payload = {
     "model": "HuggingFaceH4/zephyr-7b-beta:featherless-ai",
     "messages": [{"role": "user", "content": prompt}],
-    "temperature": temperature,
-    "max_tokens": max_tokens
+    "temperature": 0.1,  # low temperature = less hallucination
+    "max_tokens": 700
 }
 
 with st.spinner("Generating response..."):
     response = requests.post(API_URL, headers=headers, json=payload)
-
-# ==============================
-# DISPLAY RESULT
-# ==============================
 
 st.subheader("📌 Result")
 
@@ -203,11 +229,11 @@ if response.status_code == 200:
     result = response.json()
     answer = result["choices"][0]["message"]["content"]
     st.success("Response Generated Successfully")
-    st.markdown(answer)
+    st.write(answer)
 
-    # ==============================
-    # PDF DOWNLOAD FEATURE
-    # ==============================
+    # =====================================
+    # PDF DOWNLOAD
+    # =====================================
 
     def generate_pdf(text):
         buffer = io.BytesIO()
