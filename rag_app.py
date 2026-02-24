@@ -6,22 +6,47 @@ from PyPDF2 import PdfReader
 from sentence_transformers import SentenceTransformer
 import faiss
 import numpy as np
-from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Preformatted
-from reportlab.lib.styles import getSampleStyleSheet
-from reportlab.lib.units import inch
-import io
 
-# =====================================
+# ==========================================
 # PAGE CONFIG
-# =====================================
+# ==========================================
 
-st.set_page_config(page_title="Smart Document AI", layout="wide")
+st.set_page_config(
+    page_title="Smart Document AI",
+    page_icon="📄",
+    layout="wide"
+)
+
 st.title("📄 Smart Document AI")
-st.caption("Hybrid RAG • Resume Scoring • ATS Matching • Clean GPT Style")
+st.caption("Production-Grade Conversational RAG System")
 
-# =====================================
+# ==========================================
+# SIDEBAR CONTROLS (SaaS style)
+# ==========================================
+
+with st.sidebar:
+    st.header("⚙️ AI Settings")
+
+    temperature = st.slider(
+        "Creativity (Temperature)",
+        0.0, 1.0, 0.2, 0.05
+    )
+
+    max_tokens = st.slider(
+        "Max Response Length",
+        100, 800, 300, 50
+    )
+
+    st.markdown("---")
+    st.markdown("### 📂 Uploaded Documents")
+
+    if "doc_names" in st.session_state:
+        for name in st.session_state.doc_names:
+            st.write("•", name)
+
+# ==========================================
 # CHECK TOKEN
-# =====================================
+# ==========================================
 
 HF_TOKEN = os.environ.get("HUGGINGFACEHUB_API_TOKEN")
 
@@ -29,9 +54,22 @@ if not HF_TOKEN:
     st.error("HuggingFace token not found.")
     st.stop()
 
-# =====================================
-# FILE UPLOAD
-# =====================================
+# ==========================================
+# SESSION STATE INIT
+# ==========================================
+
+if "messages" not in st.session_state:
+    st.session_state.messages = []
+
+if "vector_ready" not in st.session_state:
+    st.session_state.vector_ready = False
+
+if "doc_names" not in st.session_state:
+    st.session_state.doc_names = []
+
+# ==========================================
+# FILE UPLOAD (MULTI DOC)
+# ==========================================
 
 uploaded_files = st.file_uploader(
     "Upload one or more PDFs",
@@ -39,249 +77,206 @@ uploaded_files = st.file_uploader(
     accept_multiple_files=True
 )
 
-if not uploaded_files:
-    st.info("Upload at least one PDF to begin.")
+if uploaded_files and not st.session_state.vector_ready:
+
+    all_text = ""
+    doc_names = []
+
+    for uploaded_file in uploaded_files:
+        doc_names.append(uploaded_file.name)
+
+        with tempfile.NamedTemporaryFile(delete=False) as tmp:
+            tmp.write(uploaded_file.read())
+            reader = PdfReader(tmp.name)
+
+            for page in reader.pages:
+                text = page.extract_text()
+                if text:
+                    all_text += text + "\n"
+
+    if not all_text.strip():
+        st.error("PDF contains no readable text.")
+        st.stop()
+
+    @st.cache_resource
+    def load_model():
+        return SentenceTransformer("sentence-transformers/all-MiniLM-L6-v2")
+
+    model = load_model()
+
+    chunk_size = 800
+    overlap = 150
+    chunks = []
+
+    for i in range(0, len(all_text), chunk_size - overlap):
+        chunk = all_text[i:i+chunk_size]
+        if len(chunk.strip()) > 50:
+            chunks.append(chunk)
+
+    embeddings = model.encode(chunks)
+    dimension = embeddings.shape[1]
+    index = faiss.IndexFlatL2(dimension)
+    index.add(np.array(embeddings))
+
+    st.session_state.model = model
+    st.session_state.index = index
+    st.session_state.chunks = chunks
+    st.session_state.vector_ready = True
+    st.session_state.doc_names = doc_names
+
+    st.success("Documents processed successfully.")
+
+if not st.session_state.vector_ready:
+    st.info("Upload documents to begin.")
     st.stop()
 
-# =====================================
-# EXTRACT TEXT
-# =====================================
+# ==========================================
+# DISPLAY CHAT HISTORY
+# ==========================================
 
-all_text = ""
+for msg in st.session_state.messages:
+    with st.chat_message(msg["role"]):
+        st.markdown(msg["content"])
 
-for uploaded_file in uploaded_files:
-    with tempfile.NamedTemporaryFile(delete=False) as tmp:
-        tmp.write(uploaded_file.read())
-        reader = PdfReader(tmp.name)
+# ==========================================
+# CHAT INPUT
+# ==========================================
 
-        for page in reader.pages:
-            text = page.extract_text()
-            if text:
-                all_text += text + "\n"
+user_input = st.chat_input("Ask anything about your uploaded documents...")
 
-if len(all_text.strip()) == 0:
-    st.error("This PDF contains no extractable text.")
-    st.stop()
+if user_input:
 
-st.success("Documents processed successfully.")
-
-# =====================================
-# LOAD EMBEDDING MODEL
-# =====================================
-
-@st.cache_resource
-def load_model():
-    return SentenceTransformer("sentence-transformers/all-MiniLM-L6-v2")
-
-model = load_model()
-
-# =====================================
-# SMART CHUNKING WITH OVERLAP
-# =====================================
-
-chunk_size = 800
-overlap = 150
-
-chunks = []
-for i in range(0, len(all_text), chunk_size - overlap):
-    chunk = all_text[i:i+chunk_size]
-    if len(chunk.strip()) > 50:
-        chunks.append(chunk)
-
-if len(chunks) == 0:
-    st.error("Could not create meaningful chunks.")
-    st.stop()
-
-# =====================================
-# VECTOR STORE
-# =====================================
-
-embeddings = model.encode(chunks)
-dimension = embeddings.shape[1]
-index = faiss.IndexFlatL2(dimension)
-index.add(np.array(embeddings))
-
-# =====================================
-# MODE
-# =====================================
-
-mode = st.selectbox(
-    "Choose Mode",
-    ["Ask Question", "Resume Scoring (1–10)", "ATS Match"]
-)
-
-# =====================================
-# INPUT FORM
-# =====================================
-
-with st.form("query_form"):
-    user_input = st.text_area("Enter your question or job description", height=150)
-    submitted = st.form_submit_button("🚀 Generate")
-
-if not submitted:
-    st.stop()
-
-if not user_input.strip():
-    st.warning("Please enter something.")
-    st.stop()
-
-# =====================================
-# FAST KEYWORD SEARCH (FIXES CGPA ISSUE)
-# =====================================
-
-if mode == "Ask Question":
-    keyword = user_input.strip().lower().replace("?", "")
-
-    if len(keyword.split()) <= 2:
-        if keyword in all_text.lower():
-            lines = all_text.split("\n")
-            for line in lines:
-                if keyword in line.lower():
-                    st.subheader("📌 Result")
-                    clean_line = line.strip()
-                    st.success("Response Generated Successfully")
-                    st.write(clean_line)
-                    st.stop()
-
-# =====================================
-# ADAPTIVE SEMANTIC RETRIEVAL
-# =====================================
-
-query_vector = model.encode([user_input])
-
-if len(user_input.split()) <= 2:
-    k_value = 6
-    threshold = 1.8
-else:
-    k_value = 4
-    threshold = 1.5
-
-D, I = index.search(np.array(query_vector), k=k_value)
-
-relevant_chunks = []
-for distance, idx in zip(D[0], I[0]):
-    if distance < threshold:
-        relevant_chunks.append(chunks[idx])
-
-if len(relevant_chunks) == 0:
-    st.warning("Not found in document.")
-    st.stop()
-
-retrieved_context = "\n\n".join(relevant_chunks)
-
-# =====================================
-# STRICT GPT STYLE PROMPT
-# =====================================
-
-if mode == "Ask Question":
-
-    prompt = f"""
-You are a precise document extraction assistant.
-
-Rules:
-- Return ONLY the direct answer.
-- Do NOT explain.
-- Do NOT add extra text.
-- If answer not present, reply exactly:
-  Not found in document.
-
-Context:
-{retrieved_context}
-
-Question:
-{user_input}
-
-Return only the final answer.
-"""
-
-elif mode == "Resume Scoring (1–10)":
-
-    prompt = f"""
-Provide:
-1. Resume score (1–10)
-2. Strengths
-3. Weaknesses
-4. Suggestions
-
-Resume:
-{retrieved_context}
-"""
-
-elif mode == "ATS Match":
-
-    prompt = f"""
-Return:
-1. ATS match percentage
-2. Missing keywords
-3. Suggestions
-
-Resume:
-{retrieved_context}
-
-Job Description:
-{user_input}
-"""
-
-# =====================================
-# HUGGING FACE API CALL
-# =====================================
-
-API_URL = "https://router.huggingface.co/v1/chat/completions"
-
-headers = {
-    "Authorization": f"Bearer {HF_TOKEN}",
-    "Content-Type": "application/json"
-}
-
-payload = {
-    "model": "HuggingFaceH4/zephyr-7b-beta:featherless-ai",
-    "messages": [{"role": "user", "content": prompt}],
-    "temperature": 0.1,
-    "max_tokens": 200
-}
-
-with st.spinner("Generating response..."):
-    response = requests.post(API_URL, headers=headers, json=payload)
-
-st.subheader("📌 Result")
-
-if response.status_code == 200:
-    result = response.json()
-    answer = result["choices"][0]["message"]["content"].strip()
-
-    # Clean extra lines
-    answer = answer.split("\n")[0]
-
-    st.success("Response Generated Successfully")
-    st.write(answer)
-
-    # =====================================
-    # PDF DOWNLOAD
-    # =====================================
-
-    def generate_pdf(text):
-        buffer = io.BytesIO()
-        doc = SimpleDocTemplate(buffer)
-        styles = getSampleStyleSheet()
-        elements = []
-
-        elements.append(Paragraph("Smart Document AI Result", styles["Heading1"]))
-        elements.append(Spacer(1, 0.3 * inch))
-        elements.append(Preformatted(text, styles["Code"]))
-
-        doc.build(elements)
-        buffer.seek(0)
-        return buffer
-
-    pdf_file = generate_pdf(answer)
-
-    st.download_button(
-        label="📥 Download as PDF",
-        data=pdf_file,
-        file_name="Smart_Document_AI_Result.pdf",
-        mime="application/pdf"
+    st.session_state.messages.append(
+        {"role": "user", "content": user_input}
     )
 
-else:
-    st.error(f"API Error: {response.status_code}")
-    st.code(response.text)
+    with st.chat_message("user"):
+        st.markdown(user_input)
+
+    model = st.session_state.model
+    index = st.session_state.index
+    chunks = st.session_state.chunks
+
+    # ======================================
+    # FAST KEYWORD SEARCH
+    # ======================================
+
+    keyword = user_input.strip().lower().replace("?", "")
+
+    for chunk in chunks:
+        if keyword in chunk.lower() and len(keyword.split()) <= 2:
+            answer = next(
+                (line.strip() for line in chunk.split("\n")
+                 if keyword in line.lower()),
+                None
+            )
+
+            if answer:
+                with st.chat_message("assistant"):
+                    st.markdown(answer)
+                st.session_state.messages.append(
+                    {"role": "assistant", "content": answer}
+                )
+                st.stop()
+
+    # ======================================
+    # SEMANTIC SEARCH
+    # ======================================
+
+    query_vector = model.encode([user_input])
+    D, I = index.search(np.array(query_vector), k=5)
+
+    relevant_chunks = []
+    for distance, idx in zip(D[0], I[0]):
+        if distance < 1.7:
+            relevant_chunks.append(chunks[idx])
+
+    if not relevant_chunks:
+        answer = "Not found in document."
+        with st.chat_message("assistant"):
+            st.markdown(answer)
+        st.session_state.messages.append(
+            {"role": "assistant", "content": answer}
+        )
+        st.stop()
+
+    context = "\n\n".join(relevant_chunks)
+
+    # ======================================
+    # BUILD PROMPT
+    # ======================================
+
+    conversation_history = ""
+    for msg in st.session_state.messages[-6:]:
+        conversation_history += f"{msg['role']}: {msg['content']}\n"
+
+    prompt = f"""
+You are a professional AI document assistant.
+
+Rules:
+- Use only the given context.
+- If factual question, answer short and precise.
+- If analytical, format clearly.
+- If not found, reply exactly:
+  Not found in document.
+
+Conversation:
+{conversation_history}
+
+Context:
+{context}
+
+User:
+{user_input}
+"""
+
+    # ======================================
+    # STREAMING OUTPUT
+    # ======================================
+
+    API_URL = "https://router.huggingface.co/v1/chat/completions"
+
+    headers = {
+        "Authorization": f"Bearer {HF_TOKEN}",
+        "Content-Type": "application/json"
+    }
+
+    payload = {
+        "model": "HuggingFaceH4/zephyr-7b-beta:featherless-ai",
+        "messages": [{"role": "user", "content": prompt}],
+        "temperature": temperature,
+        "max_tokens": max_tokens,
+        "stream": True
+    }
+
+    with st.chat_message("assistant"):
+        message_placeholder = st.empty()
+        full_response = ""
+
+        with requests.post(API_URL, headers=headers,
+                           json=payload, stream=True) as response:
+
+            for line in response.iter_lines():
+                if line:
+                    decoded = line.decode("utf-8")
+
+                    if decoded.startswith("data: "):
+                        data = decoded[6:]
+
+                        if data.strip() == "[DONE]":
+                            break
+
+                        try:
+                            chunk_json = eval(data)
+                            delta = chunk_json["choices"][0]["delta"]
+                            content = delta.get("content", "")
+                            full_response += content
+                            message_placeholder.markdown(full_response + "▌")
+                        except:
+                            pass
+
+        message_placeholder.markdown(full_response)
+
+    st.session_state.messages.append(
+        {"role": "assistant", "content": full_response}
+    )
