@@ -2,61 +2,75 @@ import streamlit as st
 import os
 import requests
 import tempfile
+import json
 from PyPDF2 import PdfReader
 from sentence_transformers import SentenceTransformer
 import faiss
 import numpy as np
 
-# ==========================================
+# =========================================
 # PAGE CONFIG
-# ==========================================
+# =========================================
 
 st.set_page_config(
     page_title="Smart Document AI",
-    page_icon="📄",
+    page_icon="🧠",
     layout="wide"
 )
 
-st.title("📄 Smart Document AI")
-st.caption("Production-Grade Conversational RAG System")
+# =========================================
+# CUSTOM CHATGPT-LIKE CSS
+# =========================================
 
-# ==========================================
-# SIDEBAR CONTROLS (SaaS style)
-# ==========================================
+st.markdown("""
+<style>
 
-with st.sidebar:
-    st.header("⚙️ AI Settings")
+.block-container {
+    padding-top: 1.5rem;
+    max-width: 900px;
+    margin: auto;
+}
 
-    temperature = st.slider(
-        "Creativity (Temperature)",
-        0.0, 1.0, 0.2, 0.05
-    )
+section[data-testid="stSidebar"] {
+    background-color: #0f172a;
+    border-right: 1px solid #1e293b;
+}
 
-    max_tokens = st.slider(
-        "Max Response Length",
-        100, 800, 300, 50
-    )
+.stChatMessage {
+    border-radius: 14px;
+    padding: 14px 18px;
+    margin-bottom: 12px;
+    font-size: 15px;
+}
 
-    st.markdown("---")
-    st.markdown("### 📂 Uploaded Documents")
+[data-testid="stChatMessage-user"] {
+    background-color: #1e293b;
+}
 
-    if "doc_names" in st.session_state:
-        for name in st.session_state.doc_names:
-            st.write("•", name)
+[data-testid="stChatMessage-assistant"] {
+    background-color: #111827;
+}
 
-# ==========================================
+textarea {
+    border-radius: 12px !important;
+}
+
+</style>
+""", unsafe_allow_html=True)
+
+# =========================================
 # CHECK TOKEN
-# ==========================================
+# =========================================
 
 HF_TOKEN = os.environ.get("HUGGINGFACEHUB_API_TOKEN")
 
 if not HF_TOKEN:
-    st.error("HuggingFace token not found.")
+    st.error("HuggingFace token missing.")
     st.stop()
 
-# ==========================================
+# =========================================
 # SESSION STATE INIT
-# ==========================================
+# =========================================
 
 if "messages" not in st.session_state:
     st.session_state.messages = []
@@ -64,26 +78,44 @@ if "messages" not in st.session_state:
 if "vector_ready" not in st.session_state:
     st.session_state.vector_ready = False
 
-if "doc_names" not in st.session_state:
-    st.session_state.doc_names = []
+if "chunks" not in st.session_state:
+    st.session_state.chunks = []
 
-# ==========================================
-# FILE UPLOAD (MULTI DOC)
-# ==========================================
+# =========================================
+# SIDEBAR
+# =========================================
 
-uploaded_files = st.file_uploader(
-    "Upload one or more PDFs",
-    type="pdf",
-    accept_multiple_files=True
-)
+with st.sidebar:
+
+    st.markdown("## 🧠 Smart AI")
+
+    if st.button("➕ New Chat"):
+        st.session_state.messages = []
+
+    st.markdown("---")
+
+    uploaded_files = st.file_uploader(
+        "Upload PDF(s)",
+        type="pdf",
+        accept_multiple_files=True
+    )
+
+    st.markdown("---")
+
+    st.markdown("### ⚙️ Settings")
+
+    temperature = st.slider("Temperature", 0.0, 1.0, 0.2, 0.05)
+    max_tokens = st.slider("Max Tokens", 100, 800, 300, 50)
+
+# =========================================
+# DOCUMENT PROCESSING
+# =========================================
 
 if uploaded_files and not st.session_state.vector_ready:
 
     all_text = ""
-    doc_names = []
 
     for uploaded_file in uploaded_files:
-        doc_names.append(uploaded_file.name)
 
         with tempfile.NamedTemporaryFile(delete=False) as tmp:
             tmp.write(uploaded_file.read())
@@ -106,8 +138,8 @@ if uploaded_files and not st.session_state.vector_ready:
 
     chunk_size = 800
     overlap = 150
-    chunks = []
 
+    chunks = []
     for i in range(0, len(all_text), chunk_size - overlap):
         chunk = all_text[i:i+chunk_size]
         if len(chunk.strip()) > 50:
@@ -122,27 +154,38 @@ if uploaded_files and not st.session_state.vector_ready:
     st.session_state.index = index
     st.session_state.chunks = chunks
     st.session_state.vector_ready = True
-    st.session_state.doc_names = doc_names
 
     st.success("Documents processed successfully.")
 
+# Stop if no docs
 if not st.session_state.vector_ready:
-    st.info("Upload documents to begin.")
+    st.info("Upload PDF(s) to begin.")
     st.stop()
 
-# ==========================================
+# =========================================
+# HEADER
+# =========================================
+
+st.markdown("""
+<h2 style='text-align:center;'>Smart Document AI</h2>
+<p style='text-align:center; color:gray;'>
+ChatGPT-style Conversational RAG System
+</p>
+""", unsafe_allow_html=True)
+
+# =========================================
 # DISPLAY CHAT HISTORY
-# ==========================================
+# =========================================
 
 for msg in st.session_state.messages:
     with st.chat_message(msg["role"]):
         st.markdown(msg["content"])
 
-# ==========================================
+# =========================================
 # CHAT INPUT
-# ==========================================
+# =========================================
 
-user_input = st.chat_input("Ask anything about your uploaded documents...")
+user_input = st.chat_input("Message Smart AI...")
 
 if user_input:
 
@@ -157,31 +200,28 @@ if user_input:
     index = st.session_state.index
     chunks = st.session_state.chunks
 
-    # ======================================
+    # =====================================
     # FAST KEYWORD SEARCH
-    # ======================================
+    # =====================================
 
-    keyword = user_input.strip().lower().replace("?", "")
+    keyword = user_input.lower().replace("?", "").strip()
 
-    for chunk in chunks:
-        if keyword in chunk.lower() and len(keyword.split()) <= 2:
-            answer = next(
-                (line.strip() for line in chunk.split("\n")
-                 if keyword in line.lower()),
-                None
-            )
+    if len(keyword.split()) <= 2:
+        for chunk in chunks:
+            if keyword in chunk.lower():
+                for line in chunk.split("\n"):
+                    if keyword in line.lower():
+                        answer = line.strip()
+                        with st.chat_message("assistant"):
+                            st.markdown(answer)
+                        st.session_state.messages.append(
+                            {"role": "assistant", "content": answer}
+                        )
+                        st.stop()
 
-            if answer:
-                with st.chat_message("assistant"):
-                    st.markdown(answer)
-                st.session_state.messages.append(
-                    {"role": "assistant", "content": answer}
-                )
-                st.stop()
-
-    # ======================================
+    # =====================================
     # SEMANTIC SEARCH
-    # ======================================
+    # =====================================
 
     query_vector = model.encode([user_input])
     D, I = index.search(np.array(query_vector), k=5)
@@ -202,26 +242,19 @@ if user_input:
 
     context = "\n\n".join(relevant_chunks)
 
-    # ======================================
+    # =====================================
     # BUILD PROMPT
-    # ======================================
-
-    conversation_history = ""
-    for msg in st.session_state.messages[-6:]:
-        conversation_history += f"{msg['role']}: {msg['content']}\n"
+    # =====================================
 
     prompt = f"""
 You are a professional AI document assistant.
 
 Rules:
-- Use only the given context.
-- If factual question, answer short and precise.
-- If analytical, format clearly.
+- Use only provided context.
+- Answer clearly and precisely.
+- If short factual question, give direct answer only.
 - If not found, reply exactly:
   Not found in document.
-
-Conversation:
-{conversation_history}
 
 Context:
 {context}
@@ -230,9 +263,9 @@ User:
 {user_input}
 """
 
-    # ======================================
-    # STREAMING OUTPUT
-    # ======================================
+    # =====================================
+    # STREAMING RESPONSE (FIXED)
+    # =====================================
 
     API_URL = "https://router.huggingface.co/v1/chat/completions"
 
@@ -253,27 +286,34 @@ User:
         message_placeholder = st.empty()
         full_response = ""
 
-        with requests.post(API_URL, headers=headers,
-                           json=payload, stream=True) as response:
+        response = requests.post(
+            API_URL,
+            headers=headers,
+            json=payload,
+            stream=True
+        )
 
-            for line in response.iter_lines():
-                if line:
-                    decoded = line.decode("utf-8")
+        for line in response.iter_lines():
+            if line:
+                decoded_line = line.decode("utf-8")
 
-                    if decoded.startswith("data: "):
-                        data = decoded[6:]
+                if decoded_line.startswith("data: "):
+                    data = decoded_line.replace("data: ", "")
 
-                        if data.strip() == "[DONE]":
-                            break
+                    if data.strip() == "[DONE]":
+                        break
 
-                        try:
-                            chunk_json = eval(data)
-                            delta = chunk_json["choices"][0]["delta"]
-                            content = delta.get("content", "")
+                    try:
+                        json_data = json.loads(data)
+                        delta = json_data["choices"][0]["delta"]
+
+                        if "content" in delta:
+                            content = delta["content"]
                             full_response += content
                             message_placeholder.markdown(full_response + "▌")
-                        except:
-                            pass
+
+                    except:
+                        pass
 
         message_placeholder.markdown(full_response)
 
