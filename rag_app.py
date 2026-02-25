@@ -2,88 +2,33 @@ import streamlit as st
 import os
 import requests
 import tempfile
-import json
+import numpy as np
+import faiss
 from PyPDF2 import PdfReader
 from sentence_transformers import SentenceTransformer
-import faiss
-import numpy as np
 
-# =========================================
+# ==========================================
 # PAGE CONFIG
-# =========================================
+# ==========================================
 
-st.set_page_config(
-    page_title="Smart Document AI",
-    page_icon="🧠",
-    layout="wide"
-)
+st.set_page_config(page_title="Smart Document AI", layout="wide")
 
-# =========================================
-# CUSTOM CHATGPT-LIKE CSS
-# =========================================
+st.title("🧠 Smart Document AI")
+st.caption("ChatGPT-style Conversational RAG System")
 
-st.markdown("""
-<style>
-
-.block-container {
-    padding-top: 1.5rem;
-    max-width: 900px;
-    margin: auto;
-}
-
-section[data-testid="stSidebar"] {
-    background-color: #0f172a;
-    border-right: 1px solid #1e293b;
-}
-
-.stChatMessage {
-    border-radius: 14px;
-    padding: 14px 18px;
-    margin-bottom: 12px;
-    font-size: 15px;
-}
-
-[data-testid="stChatMessage-user"] {
-    background-color: #1e293b;
-}
-
-[data-testid="stChatMessage-assistant"] {
-    background-color: #111827;
-}
-
-textarea {
-    border-radius: 12px !important;
-}
-
-</style>
-""", unsafe_allow_html=True)
-
-# =========================================
-# CHECK TOKEN
-# =========================================
-
-HF_TOKEN = os.environ.get("HUGGINGFACEHUB_API_TOKEN")
-
-if not HF_TOKEN:
-    st.error("HuggingFace token missing.")
-    st.stop()
-
-# =========================================
-# SESSION STATE INIT
-# =========================================
+# ==========================================
+# SESSION STATE
+# ==========================================
 
 if "messages" not in st.session_state:
     st.session_state.messages = []
 
-if "vector_ready" not in st.session_state:
-    st.session_state.vector_ready = False
+if "mode" not in st.session_state:
+    st.session_state.mode = "Chat"
 
-if "chunks" not in st.session_state:
-    st.session_state.chunks = []
-
-# =========================================
+# ==========================================
 # SIDEBAR
-# =========================================
+# ==========================================
 
 with st.sidebar:
 
@@ -101,171 +46,165 @@ with st.sidebar:
     )
 
     st.markdown("---")
+    st.markdown("### 🛠 Tools")
 
-    st.markdown("### ⚙️ Settings")
+    if st.button("💬 Chat Mode"):
+        st.session_state.mode = "Chat"
+
+    if st.button("📄 Resume Scoring (1–10)"):
+        st.session_state.mode = "Resume"
+
+    if st.button("🎯 ATS Match Analysis"):
+        st.session_state.mode = "ATS"
+
+    st.markdown("---")
+    st.markdown("### ⚙️ AI Settings")
 
     temperature = st.slider("Temperature", 0.0, 1.0, 0.2, 0.05)
     max_tokens = st.slider("Max Tokens", 100, 800, 300, 50)
 
-# =========================================
-# DOCUMENT PROCESSING
-# =========================================
+# ==========================================
+# CHECK TOKEN
+# ==========================================
 
-if uploaded_files and not st.session_state.vector_ready:
+HF_TOKEN = os.environ.get("HUGGINGFACEHUB_API_TOKEN")
 
-    all_text = ""
+if not HF_TOKEN:
+    st.error("HuggingFace token missing in Secrets.")
+    st.stop()
 
-    for uploaded_file in uploaded_files:
+# ==========================================
+# PROCESS PDF
+# ==========================================
 
+if uploaded_files:
+
+    full_text = ""
+
+    for file in uploaded_files:
         with tempfile.NamedTemporaryFile(delete=False) as tmp:
-            tmp.write(uploaded_file.read())
+            tmp.write(file.read())
             reader = PdfReader(tmp.name)
-
             for page in reader.pages:
                 text = page.extract_text()
                 if text:
-                    all_text += text + "\n"
+                    full_text += text + "\n"
 
-    if not all_text.strip():
-        st.error("PDF contains no readable text.")
-        st.stop()
+    # Chunking
+    chunks = [full_text[i:i+800] for i in range(0, len(full_text), 800)]
 
-    @st.cache_resource
-    def load_model():
-        return SentenceTransformer("sentence-transformers/all-MiniLM-L6-v2")
-
-    model = load_model()
-
-    chunk_size = 800
-    overlap = 150
-
-    chunks = []
-    for i in range(0, len(all_text), chunk_size - overlap):
-        chunk = all_text[i:i+chunk_size]
-        if len(chunk.strip()) > 50:
-            chunks.append(chunk)
+    # Embedding model
+    model = SentenceTransformer("sentence-transformers/all-MiniLM-L6-v2")
 
     embeddings = model.encode(chunks)
+
+    if len(embeddings) == 0:
+        st.warning("No readable text found in PDF.")
+        st.stop()
+
     dimension = embeddings.shape[1]
+
     index = faiss.IndexFlatL2(dimension)
     index.add(np.array(embeddings))
 
-    st.session_state.model = model
-    st.session_state.index = index
-    st.session_state.chunks = chunks
-    st.session_state.vector_ready = True
-
-    st.success("Documents processed successfully.")
-
-# Stop if no docs
-if not st.session_state.vector_ready:
-    st.info("Upload PDF(s) to begin.")
+else:
+    st.info("Upload PDF to begin.")
     st.stop()
 
-# =========================================
-# HEADER
-# =========================================
+# ==========================================
+# CHAT INTERFACE
+# ==========================================
 
-st.markdown("""
-<h2 style='text-align:center;'>Smart Document AI</h2>
-<p style='text-align:center; color:gray;'>
-ChatGPT-style Conversational RAG System
-</p>
-""", unsafe_allow_html=True)
+for message in st.session_state.messages:
+    with st.chat_message(message["role"]):
+        st.markdown(message["content"])
 
-# =========================================
-# DISPLAY CHAT HISTORY
-# =========================================
-
-for msg in st.session_state.messages:
-    with st.chat_message(msg["role"]):
-        st.markdown(msg["content"])
-
-# =========================================
-# CHAT INPUT
-# =========================================
-
-user_input = st.chat_input("Message Smart AI...")
+user_input = st.chat_input("Ask anything about your document...")
 
 if user_input:
 
-    st.session_state.messages.append(
-        {"role": "user", "content": user_input}
-    )
+    st.session_state.messages.append({"role": "user", "content": user_input})
 
     with st.chat_message("user"):
         st.markdown(user_input)
 
-    model = st.session_state.model
-    index = st.session_state.index
-    chunks = st.session_state.chunks
-
-    # =====================================
-    # FAST KEYWORD SEARCH
-    # =====================================
-
-    keyword = user_input.lower().replace("?", "").strip()
-
-    if len(keyword.split()) <= 2:
-        for chunk in chunks:
-            if keyword in chunk.lower():
-                for line in chunk.split("\n"):
-                    if keyword in line.lower():
-                        answer = line.strip()
-                        with st.chat_message("assistant"):
-                            st.markdown(answer)
-                        st.session_state.messages.append(
-                            {"role": "assistant", "content": answer}
-                        )
-                        st.stop()
-
-    # =====================================
-    # SEMANTIC SEARCH
-    # =====================================
+    # ======================================
+    # HYBRID RETRIEVAL
+    # ======================================
 
     query_vector = model.encode([user_input])
     D, I = index.search(np.array(query_vector), k=5)
 
-    relevant_chunks = []
-    for distance, idx in zip(D[0], I[0]):
-        if distance < 1.7:
-            relevant_chunks.append(chunks[idx])
+    semantic_context = "\n\n".join([chunks[i] for i in I[0]])
 
-    if not relevant_chunks:
-        answer = "Not found in document."
-        with st.chat_message("assistant"):
-            st.markdown(answer)
-        st.session_state.messages.append(
-            {"role": "assistant", "content": answer}
-        )
-        st.stop()
+    # Simple keyword retrieval
+    keyword_hits = []
+    for chunk in chunks:
+        if user_input.lower() in chunk.lower():
+            keyword_hits.append(chunk)
 
-    context = "\n\n".join(relevant_chunks)
+    keyword_context = "\n\n".join(keyword_hits[:3])
 
-    # =====================================
-    # BUILD PROMPT
-    # =====================================
+    context = semantic_context + "\n\n" + keyword_context
 
-    prompt = f"""
-You are a professional AI document assistant.
+    # ======================================
+    # PROMPT BUILDING
+    # ======================================
 
-Rules:
-- Use only provided context.
-- Answer clearly and precisely.
-- If short factual question, give direct answer only.
-- If not found, reply exactly:
-  Not found in document.
+    mode = st.session_state.mode
+
+    if mode == "Chat":
+
+        prompt = f"""
+You are a professional AI assistant.
+
+Use only the context below.
+If short factual question (like CGPA), answer directly.
+If not found, reply exactly:
+Not found in document.
 
 Context:
 {context}
 
-User:
+Question:
 {user_input}
 """
 
-    # =====================================
-    # STREAMING RESPONSE (FIXED)
-    # =====================================
+    elif mode == "Resume":
+
+        prompt = f"""
+You are a professional resume evaluator.
+
+Give:
+1. Resume Score (1–10)
+2. Strengths
+3. Weaknesses
+4. Improvement Suggestions
+
+Resume:
+{context}
+"""
+
+    elif mode == "ATS":
+
+        prompt = f"""
+Compare resume with job description.
+
+Return:
+1. ATS Match Percentage
+2. Missing Keywords
+3. Suggestions
+
+Resume:
+{context}
+
+Job Description:
+{user_input}
+"""
+
+    # ======================================
+    # API CALL
+    # ======================================
 
     API_URL = "https://router.huggingface.co/v1/chat/completions"
 
@@ -278,45 +217,22 @@ User:
         "model": "HuggingFaceH4/zephyr-7b-beta:featherless-ai",
         "messages": [{"role": "user", "content": prompt}],
         "temperature": temperature,
-        "max_tokens": max_tokens,
-        "stream": True
+        "max_tokens": max_tokens
     }
 
+    response = requests.post(API_URL, headers=headers, json=payload)
+
+    if response.status_code == 200:
+        result = response.json()
+        answer = result["choices"][0]["message"]["content"]
+    else:
+        answer = f"API Error: {response.status_code}"
+
+    # ======================================
+    # DISPLAY ANSWER
+    # ======================================
+
     with st.chat_message("assistant"):
-        message_placeholder = st.empty()
-        full_response = ""
+        st.markdown(answer)
 
-        response = requests.post(
-            API_URL,
-            headers=headers,
-            json=payload,
-            stream=True
-        )
-
-        for line in response.iter_lines():
-            if line:
-                decoded_line = line.decode("utf-8")
-
-                if decoded_line.startswith("data: "):
-                    data = decoded_line.replace("data: ", "")
-
-                    if data.strip() == "[DONE]":
-                        break
-
-                    try:
-                        json_data = json.loads(data)
-                        delta = json_data["choices"][0]["delta"]
-
-                        if "content" in delta:
-                            content = delta["content"]
-                            full_response += content
-                            message_placeholder.markdown(full_response + "▌")
-
-                    except:
-                        pass
-
-        message_placeholder.markdown(full_response)
-
-    st.session_state.messages.append(
-        {"role": "assistant", "content": full_response}
-    )
+    st.session_state.messages.append({"role": "assistant", "content": answer})
